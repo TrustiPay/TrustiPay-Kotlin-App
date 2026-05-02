@@ -102,8 +102,9 @@ class LocalLlmBrain(private val context: Context) {
     }
 
     companion object {
+        const val MODEL_FILENAME = "gemma-2b-it-cpu-int4.bin"
         private val MODEL_FILENAMES = listOf(
-            "gemma-2b-it-cpu-int4.bin",
+            MODEL_FILENAME,
             "gemma-2b-it-gpu-int4.bin",
             "gemma-1.1-2b-it-cpu-int4.bin",
             "gemma-4-e2b-it.bin", // User's specific name

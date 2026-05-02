@@ -86,6 +86,12 @@ fun VoiceAssistantScreen(
         }
     }
 
+    val modelPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        uri?.let { viewModel.importLlmModel(it) }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             viewModel.cancelActiveWork()
@@ -154,6 +160,7 @@ fun VoiceAssistantScreen(
                     onDownload = viewModel::downloadModel,
                     onRetry = viewModel::refreshModelState,
                     onDelete = viewModel::deleteModel,
+                    onImportLlm = { modelPickerLauncher.launch(arrayOf("*/*")) }
                 )
             }
         }
@@ -269,6 +276,7 @@ private fun ModelSetupPanel(
     onDownload: () -> Unit,
     onRetry: () -> Unit,
     onDelete: () -> Unit,
+    onImportLlm: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -324,6 +332,15 @@ private fun ModelSetupPanel(
                     Spacer(modifier = Modifier.size(8.dp))
                     Text("Download voice model", fontWeight = FontWeight.Bold)
                 }
+            }
+
+            OutlinedButton(
+                onClick = onImportLlm,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null)
+                Spacer(modifier = Modifier.size(8.dp))
+                Text("Import Gemma Model (.bin)")
             }
 
             if (uiState.modelState == VoiceModelState.Failed) {
