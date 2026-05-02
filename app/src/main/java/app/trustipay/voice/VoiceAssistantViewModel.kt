@@ -1,10 +1,8 @@
 package app.trustipay.voice
 
 import android.app.Application
-import android.net.Uri
 import app.trustipay.BuildConfig
 import java.io.File
-import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -114,24 +112,6 @@ class VoiceAssistantViewModel(
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 updateModelFailure(throwable, "Voice model download failed.")
-            }
-        }
-    }
-
-    fun importLlmModel(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            updateState { it.copy(statusMessage = "Importing LLM model...") }
-            try {
-                val destinationFile = File(getApplication<Application>().filesDir, LocalLlmBrain.MODEL_FILENAME)
-                getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
-                    destinationFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                llmBrain.initialize()
-                updateState { it.copy(statusMessage = readyStatusMessage()) }
-            } catch (e: IOException) {
-                updateState { it.copy(statusMessage = "Failed to import LLM model: ${e.message}") }
             }
         }
     }

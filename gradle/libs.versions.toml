@@ -10,6 +10,7 @@ kotlin = "2.2.10"
 composeBom = "2025.12.00"
 cactus = "1.4.3-beta"
 mediapipe = "0.10.35"
+litertlm = "0.10.2"
 vosk = "0.3.75"
 # 0.3.70+ model AARs are placeholder-sized; 0.3.38 contains the actual Android English assets.
 voskModelEn = "0.3.38"
@@ -35,6 +36,7 @@ androidx-compose-material3-adaptive-navigation-suite = { group = "androidx.compo
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 cactus = { group = "com.cactuscompute", name = "cactus-android", version.ref = "cactus" }
 mediapipe-genai = { group = "com.google.mediapipe", name = "tasks-genai", version.ref = "mediapipe" }
+litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
 vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
 vosk-model-en = { group = "com.alphacephei", name = "vosk-model-en", version.ref = "voskModelEn" }
 
