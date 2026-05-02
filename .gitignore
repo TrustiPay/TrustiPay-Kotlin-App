@@ -15,3 +15,12 @@
 .cxx
 local.properties
 /.codex
+
+# Local AI model/runtime artifacts
+*.litertlm
+*.hprof
+hs_err_pid*.log
+/models/
+/app/src/main/assets/models/
+/app/src/main/assets/*.litertlm
+/app/src/main/assets/*.bin

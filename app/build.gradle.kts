@@ -75,7 +75,6 @@ dependencies {
     implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.cactus)
-    // implementation(libs.mediapipe.genai)
     implementation(libs.litertlm.android)
     implementation(libs.vosk.android)
     implementation(libs.vosk.model.en)

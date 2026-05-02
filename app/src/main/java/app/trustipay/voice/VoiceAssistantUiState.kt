@@ -11,6 +11,7 @@ data class VoiceAssistantUiState(
     val errorMessage: String? = null,
     val modelStorageDirectory: String = "",
     val liveTranscriptionLabel: String = "Whisper finalization on device",
+    val llmAnalysisState: LlmAnalysisState = LlmAnalysisState.Missing,
 ) {
     val isBusy: Boolean
         get() = modelState == VoiceModelState.Downloading ||

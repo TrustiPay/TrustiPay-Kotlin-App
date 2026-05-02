@@ -5,6 +5,7 @@ import com.cactus.CactusModelManager
 import com.cactus.CactusSTT
 import com.cactus.CactusTranscriptionParams
 import com.cactus.TranscriptionMode
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
@@ -66,6 +67,7 @@ class LocalWhisperTranscriber(
 
             if (!result.success) {
                 val errorMsg = result.errorMessage ?: "Unknown error"
+                Log.e("CactusSTT", "Transcription failed: $errorMsg (Model: $modelSlug)")
                 error("Transcription failed: $errorMsg")
             }
 

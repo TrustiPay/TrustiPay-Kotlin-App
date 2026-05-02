@@ -2,7 +2,6 @@ package app.trustipay.voice
 
 import android.app.Application
 import app.trustipay.BuildConfig
-import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,6 +34,7 @@ class VoiceAssistantViewModel(
             statusMessage = "Checking local voice model...",
             modelStorageDirectory = transcriber.modelStorageDirectory(),
             liveTranscriptionLabel = onDevicePipelineLabel(),
+            llmAnalysisState = llmBrain.analysisState(),
         )
     )
     val uiState: StateFlow<VoiceAssistantUiState> = _uiState.asStateFlow()
@@ -57,9 +57,13 @@ class VoiceAssistantViewModel(
         if (transcriber.isModelDownloaded()) {
             initializeModel()
             viewModelScope.launch(Dispatchers.IO) {
-                llmBrain.initialize()
-                // Refresh status message once LLM is ready or fails
-                updateState { it.copy(statusMessage = readyStatusMessage()) }
+                val analysisState = llmBrain.initialize()
+                updateState {
+                    it.copy(
+                        statusMessage = readyStatusMessage(),
+                        llmAnalysisState = analysisState,
+                    )
+                }
             }
         } else {
             updateState {
@@ -70,6 +74,7 @@ class VoiceAssistantViewModel(
                     errorMessage = null,
                     modelStorageDirectory = transcriber.modelStorageDirectory(),
                     liveTranscriptionLabel = onDevicePipelineLabel(),
+                    llmAnalysisState = llmBrain.analysisState(),
                 )
             }
         }
@@ -105,10 +110,15 @@ class VoiceAssistantViewModel(
                     )
                 }
                 initializeModel()
-                withContext(Dispatchers.IO) {
+                val analysisState = withContext(Dispatchers.IO) {
                     llmBrain.initialize()
                 }
-                updateState { it.copy(statusMessage = readyStatusMessage()) }
+                updateState {
+                    it.copy(
+                        statusMessage = readyStatusMessage(),
+                        llmAnalysisState = analysisState,
+                    )
+                }
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 updateModelFailure(throwable, "Voice model download failed.")
@@ -135,6 +145,7 @@ class VoiceAssistantViewModel(
                     errorMessage = null,
                     modelStorageDirectory = transcriber.modelStorageDirectory(),
                     liveTranscriptionLabel = onDevicePipelineLabel(),
+                    llmAnalysisState = llmBrain.analysisState(),
                 )
             }
         }
@@ -156,6 +167,7 @@ class VoiceAssistantViewModel(
                     statusMessage = readyStatusMessage(voskTranscriber.status()),
                     errorMessage = null,
                     liveTranscriptionLabel = onDevicePipelineLabel(),
+                    llmAnalysisState = llmBrain.analysisState(),
                 )
             }
         }
@@ -276,6 +288,7 @@ class VoiceAssistantViewModel(
                     statusMessage = readyStatusMessage(voskTranscriber.status()),
                     errorMessage = null,
                     liveTranscriptionLabel = onDevicePipelineLabel(),
+                    llmAnalysisState = llmBrain.analysisState(),
                 )
             }
         }
@@ -309,6 +322,7 @@ class VoiceAssistantViewModel(
                         errorMessage = null,
                         modelStorageDirectory = transcriber.modelStorageDirectory(),
                         liveTranscriptionLabel = onDevicePipelineLabel(),
+                        llmAnalysisState = llmBrain.analysisState(),
                     )
                 }
                 initializeVoskLiveTranscriber()
@@ -332,6 +346,7 @@ class VoiceAssistantViewModel(
                         statusMessage = readyStatusMessage(liveStatus),
                         errorMessage = null,
                         liveTranscriptionLabel = onDevicePipelineLabel(liveStatus),
+                        llmAnalysisState = llmBrain.analysisState(),
                     )
                 }
             }
@@ -415,32 +430,38 @@ class VoiceAssistantViewModel(
         }
 
         try {
-            val finalText = transcriber.transcribe(audio) { partialText ->
-                updateTranscriptIfActive(activeSession, partialText)
+            val resultText = try {
+                transcriber.transcribe(audio) { partialText ->
+                    updateTranscriptIfActive(activeSession, partialText)
+                }
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                // LOG the failure but don't crash yet, we might have a Vosk fallback
+                android.util.Log.e("VoiceAssistantVM", "Whisper finalization failed: ${throwable.message}")
+                null
             }
+
             if (activeSession != sessionId) return
 
-            val cleanText = finalText.trim().ifBlank {
-                _uiState.value.transcript.trim()
-            }
+            // FALLBACK logic: Use Whisper result if successful, otherwise use what we have from Vosk
+            val currentLiveText = _uiState.value.transcript.trim()
+            val cleanText = (resultText?.trim() ?: "").ifBlank { currentLiveText }
             
             if (cleanText.isNotBlank()) {
                 updateState {
                     it.copy(
-                        statusMessage = "Understanding your request...",
+                        statusMessage = if (resultText == null && currentLiveText.isNotBlank()) {
+                            "Whisper failed, using live preview for analysis..."
+                        } else {
+                            "Understanding your request..."
+                        },
                         transcript = cleanText,
                         languageLabel = detectLanguageLabel(cleanText)
                     )
                 }
                 
                 val llmResult = llmBrain.processRequest(cleanText)
-                
-                // If LLM fails or is not ready, we still show the transcript but with a warning
-                val finalDisplay = if (llmResult.contains("error")) {
-                    "Analysis paused: $llmResult\n\nRaw transcript: $cleanText"
-                } else {
-                    llmResult
-                }
+                val finalDisplay = llmResult.toVoiceAssistantDisplay()
 
                 updateState {
                     it.copy(
@@ -449,11 +470,14 @@ class VoiceAssistantViewModel(
                         languageLabel = detectLanguageLabel(cleanText),
                         statusMessage = if (reachedMaxDuration) {
                             "Captured locally. Recording stopped at the 30 second limit."
+                        } else if (resultText == null) {
+                            "Captured locally (via live fallback)."
                         } else {
                             "Captured locally."
                         },
                         errorMessage = null,
                         liveTranscriptionLabel = onDevicePipelineLabel(),
+                        llmAnalysisState = llmBrain.analysisState(),
                     )
                 }
             } else {
@@ -465,6 +489,7 @@ class VoiceAssistantViewModel(
                         statusMessage = "No speech was recognized. Try again closer to the microphone.",
                         errorMessage = null,
                         liveTranscriptionLabel = onDevicePipelineLabel(),
+                        llmAnalysisState = llmBrain.analysisState(),
                     )
                 }
             }
@@ -502,6 +527,7 @@ class VoiceAssistantViewModel(
                 errorMessage = throwable.toFriendlyMessage(fallback),
                 modelStorageDirectory = transcriber.modelStorageDirectory(),
                 liveTranscriptionLabel = onDevicePipelineLabel(),
+                llmAnalysisState = llmBrain.analysisState(),
             )
         }
     }
@@ -516,6 +542,7 @@ class VoiceAssistantViewModel(
                 errorMessage = nativeSupport.message,
                 modelStorageDirectory = transcriber.modelStorageDirectory(),
                 liveTranscriptionLabel = onDevicePipelineLabel(),
+                llmAnalysisState = llmBrain.analysisState(),
             )
         }
     }
@@ -544,10 +571,15 @@ class VoiceAssistantViewModel(
             else -> "Ready. $modelName finalization is available; ${liveStatus.message}"
         }
         
-        return if (llmBrain.isModelAvailable()) {
-            baseMessage
-        } else {
-            "$baseMessage (Note: LLM model not found for request analysis)"
+        return when (llmBrain.analysisState()) {
+            LlmAnalysisState.Ready -> baseMessage
+            LlmAnalysisState.Initializing -> "$baseMessage (Preparing LiteRT-LM request analysis)"
+            LlmAnalysisState.Failed -> "$baseMessage (LiteRT-LM request analysis unavailable)"
+            LlmAnalysisState.Missing -> if (llmBrain.isModelAvailable()) {
+                "$baseMessage (Preparing LiteRT-LM request analysis)"
+            } else {
+                "$baseMessage (Note: LLM model not found for request analysis)"
+            }
         }
     }
 
@@ -584,6 +616,13 @@ private fun detectLanguageLabel(text: String): String {
         else -> "Not detected"
     }
 }
+
+private fun LlmAnalysisResult.toVoiceAssistantDisplay(): String =
+    when (this) {
+        is LlmAnalysisResult.Success -> toJsonString()
+        is LlmAnalysisResult.Unavailable,
+        is LlmAnalysisResult.Failure -> "Analysis paused: ${toJsonString()}\n\nRaw transcript: $rawTranscript"
+    }
 
 private fun Throwable.toFriendlyMessage(fallback: String): String {
     val message = message.orEmpty()

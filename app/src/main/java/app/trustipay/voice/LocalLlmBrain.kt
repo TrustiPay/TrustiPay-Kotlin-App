@@ -2,32 +2,135 @@ package app.trustipay.voice
 
 import android.content.Context
 import android.util.Log
-import com.google.ai.edge.litertlm.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Contents
+import com.google.ai.edge.litertlm.Conversation
+import com.google.ai.edge.litertlm.ConversationConfig
+import com.google.ai.edge.litertlm.Engine
+import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.Message
+import com.google.ai.edge.litertlm.tool
+import java.io.Closeable
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
-class LocalLlmBrain(private val context: Context) {
-    private var engine: Engine? = null
-    private var conversation: Conversation? = null
+class LocalLlmBrain internal constructor(
+    context: Context,
+    private val engineInitializer: LiteRtLmEngineInitializer = LiteRtLmEngineInitializer(),
+) : Closeable {
+    private val appContext = context.applicationContext
+    private val initializeMutex = Mutex()
+    private val analysisMutex = Mutex()
+
+    @Volatile
+    private var engine: LiteRtLmEngineHandle? = null
+
+    @Volatile
+    private var state: LlmAnalysisState = LlmAnalysisState.Missing
+
+    @Volatile
     private var initializationError: String? = null
 
-    fun isModelAvailable(): Boolean {
-        return findModelFile() != null
+    fun isModelAvailable(): Boolean = findModelFile() != null
+
+    fun analysisState(): LlmAnalysisState = state
+
+    suspend fun initialize(): LlmAnalysisState = withContext(Dispatchers.IO) {
+        initializeMutex.withLock {
+            if (engine != null) {
+                state = LlmAnalysisState.Ready
+                return@withLock state
+            }
+
+            val modelFile = findModelFile()
+            if (modelFile == null) {
+                val searchDirs = searchDirectories().joinToString(", ") { it.absolutePath }
+                initializationError = "LiteRT-LM model file not found. Ensure one of $PreferredModelFilenames is in: $searchDirs"
+                state = LlmAnalysisState.Missing
+                return@withLock state
+            }
+
+            state = LlmAnalysisState.Initializing
+            initializationError = null
+
+            runCatching {
+                val initializedEngine = engineInitializer.initialize(
+                    modelPath = modelFile.absolutePath,
+                    cacheDir = liteRtLmCacheDirectory().absolutePath,
+                )
+                engine = initializedEngine
+                state = LlmAnalysisState.Ready
+                Log.d(Tag, "LiteRT-LM initialized with ${modelFile.absolutePath}")
+            }.onFailure { throwable ->
+                initializationError = throwable.toLlmFriendlyMessage("LiteRT-LM initialization failed.")
+                state = LlmAnalysisState.Failed
+                closeEngine()
+                Log.e(Tag, "LiteRT-LM initialization failed", throwable)
+            }
+
+            state
+        }
+    }
+
+    suspend fun processRequest(transcript: String): LlmAnalysisResult = withContext(Dispatchers.IO) {
+        val cleanTranscript = transcript.trim()
+        if (cleanTranscript.isBlank()) {
+            return@withContext LlmAnalysisResult.Failure(
+                rawTranscript = transcript,
+                message = "Cannot analyze an empty transcript.",
+            )
+        }
+
+        analysisMutex.withLock {
+            val initializedState = initialize()
+            val currentEngine = engine
+            if (initializedState != LlmAnalysisState.Ready || currentEngine == null) {
+                return@withLock LlmAnalysisResult.Unavailable(
+                    rawTranscript = cleanTranscript,
+                    message = initializationError ?: "LiteRT-LM request analysis is unavailable.",
+                )
+            }
+
+            runCatching {
+                currentEngine.createConversation(intentConversationConfig()).use { conversation ->
+                    val response = conversation.sendMessage(intentPrompt(cleanTranscript))
+                    BankingIntentToolCallParser.parse(
+                        toolCalls = response.toolCalls,
+                        rawTranscript = cleanTranscript,
+                    )
+                }
+            }.getOrElse { throwable ->
+                LlmAnalysisResult.Failure(
+                    rawTranscript = cleanTranscript,
+                    message = throwable.toLlmFriendlyMessage("LiteRT-LM request analysis failed."),
+                )
+            }
+        }
     }
 
     private fun findModelFile(): File? {
-        val possibleLocations = listOf(
-            context.filesDir,
-            context.getExternalFilesDir(null),
-            File("/data/local/tmp") // for adb pushed files
-        ).filterNotNull()
+        val directories = searchDirectories()
+        directories.firstExistingNamedModel()?.let { return it }
+        return directories.firstExistingLiteRtLmModel()
+    }
 
-        for (dir in possibleLocations) {
-            for (filename in MODEL_FILENAMES) {
-                val file = File(dir, filename)
-                if (file.exists()) {
-                    Log.d("LocalLlmBrain", "Found model at: ${file.absolutePath}")
+    private fun searchDirectories(): List<File> = listOfNotNull(
+        File(appContext.filesDir, "models"),
+        appContext.filesDir,
+        appContext.getExternalFilesDir(null)?.let { File(it, "models") },
+        appContext.getExternalFilesDir(null),
+        File("/data/local/tmp"),
+    )
+
+    private fun List<File>.firstExistingNamedModel(): File? {
+        for (directory in this) {
+            val files = directory.listFiles() ?: continue
+            for (file in files) {
+                if (!file.isFile) continue
+                if (PreferredModelFilenames.any { it.equals(file.name, ignoreCase = true) }) {
                     return file
                 }
             }
@@ -35,106 +138,153 @@ class LocalLlmBrain(private val context: Context) {
         return null
     }
 
-    fun initialize() {
-        if (engine != null) return
-        
-        val modelFile = findModelFile()
-        if (modelFile == null) {
-            initializationError = "Model file not found. Ensure the Gemma model is in your app's files directory."
-            return
-        }
+    private fun List<File>.firstExistingLiteRtLmModel(): File? =
+        asSequence()
+            .flatMap { directory ->
+                directory.listFiles()
+                    ?.asSequence()
+                    ?.filter { it.isFile && it.extension.equals("litertlm", ignoreCase = true) }
+                    ?.sortedBy { it.name }
+                    ?: emptySequence()
+            }
+            .firstOrNull()
 
-        try {
-            Log.d("LocalLlmBrain", "Initializing LiteRT-LM (GPU) with: ${modelFile.absolutePath}")
-            
-            val engineConfig = EngineConfig(
-                modelPath = modelFile.absolutePath,
-                backend = Backend.GPU() // Using GPU acceleration as suggested
-            )
-            
-            val newEngine = Engine(engineConfig)
-            newEngine.initialize()
-            
-            engine = newEngine
-            conversation = newEngine.createConversation(
-                ConversationConfig(
-                    systemInstruction = Contents.of("You are a helpful assistant for TrustiPay banking app.")
-                )
-            )
-            
-            initializationError = null
-            Log.d("LocalLlmBrain", "LiteRT-LM GPU initialized successfully")
-        } catch (e: Exception) {
-            initializationError = "Initialization failed: ${e.message}. Falling back to CPU."
-            Log.e("LocalLlmBrain", "GPU initialization failed, attempting CPU fallback", e)
-            tryInitializeCpu(modelFile)
-        }
-    }
+    private fun liteRtLmCacheDirectory(): File =
+        File(appContext.cacheDir, "litertlm").also { it.mkdirs() }
 
-    private fun tryInitializeCpu(modelFile: File) {
-        try {
-            val engineConfig = EngineConfig(
-                modelPath = modelFile.absolutePath,
-                backend = Backend.CPU()
-            )
-            val newEngine = Engine(engineConfig)
-            newEngine.initialize()
-            engine = newEngine
-            conversation = newEngine.createConversation()
-            initializationError = null
-        } catch (e: Exception) {
-            initializationError = "CPU fallback also failed: ${e.message}"
-            Log.e("LocalLlmBrain", "All initializations failed", e)
-            close()
-        }
-    }
+    private fun intentConversationConfig(): ConversationConfig =
+        ConversationConfig(
+            systemInstruction = Contents.of(SystemInstruction),
+            tools = listOf(tool(TrustiPayIntentToolSet())),
+            automaticToolCalling = false,
+        )
 
-    suspend fun processRequest(transcript: String): String = withContext(Dispatchers.IO) {
-        val conv = conversation
-        if (conv == null) {
-            val error = initializationError ?: "LLM not initialized or model missing"
-            return@withContext "{\"error\": \"$error\"}"
-        }
-        
-        val prompt = """
-            Analyze the following user request in English or Sinhala and convert it into a valid JSON object.
-            
-            Valid request types: send_money, check_balance, pay_bill.
-            
-            JSON format examples:
-            1. "Send 500 to Saman for food" -> {"request": "send_money", "to": "Saman", "amount": 500, "reason": "food"}
-            2. "මට සල්ලි කීයද තියෙන්නෙ කියන්න" -> {"request": "check_balance"}
-            3. "Pay 1500 to Dialog Axiata" -> {"request": "pay_bill", "to": "Dialog Axiata", "amount": 1500}
-            
-            If the request is not clear, return: {"request": "unknown", "raw": "$transcript"}
-            
-            Only return the JSON object. Do not explain.
-            
-            User Request: $transcript
-            Output:
+    private fun intentPrompt(transcript: String): String =
+        """
+        Select exactly one TrustiPay banking intent tool for this voice transcript.
+        Use send_money for transfers, pay_bill for bill payments, check_balance for balance questions, and unknown_request when unclear.
+        Do not answer with prose or JSON. Return only the tool call.
+
+        Voice transcript:
+        $transcript
         """.trimIndent()
 
-        try {
-            val response = conv.sendMessage(prompt)
-            response.toString().ifBlank { "{\"error\": \"Empty response from model\"}" }
-        } catch (e: Exception) {
-            "{\"error\": \"${e.message}\"}"
-        }
+    override fun close() {
+        closeEngine()
+        state = LlmAnalysisState.Missing
+        initializationError = null
     }
 
-    fun close() {
-        conversation?.close()
-        conversation = null
+    private fun closeEngine() {
         engine?.close()
         engine = null
     }
 
-    companion object {
-        private val MODEL_FILENAMES = listOf(
+    private companion object {
+        const val Tag = "LocalLlmBrain"
+        const val SystemInstruction = "You extract safe draft banking intents for TrustiPay. Never execute a banking action."
+
+        val PreferredModelFilenames = listOf(
+            "model.litertlm",
+            "Gemma-4-E2B-it.bin",
             "gemma-4-e2b-it.bin",
             "gemma-2b-it-cpu-int4.bin",
-            "model.litertlm",
-            "model.bin"
+            "model.bin",
         )
     }
 }
+
+internal class LiteRtLmEngineInitializer(
+    private val engineFactory: LiteRtLmEngineFactory = RealLiteRtLmEngineFactory(),
+) {
+    fun initialize(
+        modelPath: String,
+        cacheDir: String,
+    ): LiteRtLmEngineHandle {
+        val gpuFailure = runCatching {
+            return createInitializedEngine(
+                EngineConfig(
+                    modelPath = modelPath,
+                    backend = Backend.GPU(),
+                    cacheDir = cacheDir,
+                )
+            )
+        }.exceptionOrNull()
+
+        val cpuFailure = runCatching {
+            return createInitializedEngine(
+                EngineConfig(
+                    modelPath = modelPath,
+                    backend = Backend.CPU(),
+                    cacheDir = cacheDir,
+                )
+            )
+        }.exceptionOrNull()
+
+        throw IllegalStateException(
+            "GPU and CPU LiteRT-LM initialization failed. GPU: ${gpuFailure.messageOrType()}; CPU: ${cpuFailure.messageOrType()}",
+            cpuFailure ?: gpuFailure,
+        )
+    }
+
+    private fun createInitializedEngine(config: EngineConfig): LiteRtLmEngineHandle {
+        val engine = engineFactory.create(config)
+        return try {
+            engine.initialize()
+            engine
+        } catch (throwable: Throwable) {
+            engine.close()
+            throw throwable
+        }
+    }
+}
+
+internal interface LiteRtLmEngineFactory {
+    fun create(config: EngineConfig): LiteRtLmEngineHandle
+}
+
+internal interface LiteRtLmEngineHandle : Closeable {
+    fun initialize()
+    fun createConversation(config: ConversationConfig): LiteRtLmConversationHandle
+}
+
+internal interface LiteRtLmConversationHandle : Closeable {
+    fun sendMessage(message: String): Message
+}
+
+private class RealLiteRtLmEngineFactory : LiteRtLmEngineFactory {
+    override fun create(config: EngineConfig): LiteRtLmEngineHandle =
+        RealLiteRtLmEngineHandle(Engine(config))
+}
+
+private class RealLiteRtLmEngineHandle(
+    private val engine: Engine,
+) : LiteRtLmEngineHandle {
+    override fun initialize() {
+        engine.initialize()
+    }
+
+    override fun createConversation(config: ConversationConfig): LiteRtLmConversationHandle =
+        RealLiteRtLmConversationHandle(engine.createConversation(config))
+
+    override fun close() {
+        engine.close()
+    }
+}
+
+private class RealLiteRtLmConversationHandle(
+    private val conversation: Conversation,
+) : LiteRtLmConversationHandle {
+    override fun sendMessage(message: String): Message =
+        conversation.sendMessage(message)
+
+    override fun close() {
+        conversation.close()
+    }
+}
+
+private fun Throwable?.messageOrType(): String =
+    this?.message?.ifBlank { this::class.java.simpleName } ?: "not attempted"
+
+private fun Throwable.toLlmFriendlyMessage(fallback: String): String =
+    message?.takeIf { it.isNotBlank() } ?: fallback
