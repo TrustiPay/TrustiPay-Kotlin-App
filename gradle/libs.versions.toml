@@ -10,7 +10,7 @@ kotlin = "2.2.10"
 composeBom = "2025.12.00"
 cactus = "1.4.3-beta"
 mediapipe = "0.10.35"
-vosk = "0.3.47"
+vosk = "0.3.75"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -33,7 +33,7 @@ androidx-compose-material3-adaptive-navigation-suite = { group = "androidx.compo
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 cactus = { group = "com.cactuscompute", name = "cactus-android", version.ref = "cactus" }
 mediapipe-genai = { group = "com.google.mediapipe", name = "tasks-genai", version.ref = "mediapipe" }
-vosk-android = { group = "org.alphacephei", name = "vosk-android", version.ref = "vosk" }
+vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
