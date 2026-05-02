@@ -21,10 +21,12 @@ class VoiceAssistantViewModel(
     private val recorder = LocalAudioRecorder()
     private val transcriber = LocalWhisperTranscriber(modelName)
     private val audioBuffer = RollingPcmBuffer(LocalAudioRecorder.MaxRecordingBytes)
+    private val nativeSupport = NativeTranscriptionCompatibility.check()
 
     private val _uiState = MutableStateFlow(
         VoiceAssistantUiState(
             modelName = modelName,
+            isDeviceSupported = nativeSupport.isSupported,
             statusMessage = "Checking local voice model...",
             modelStorageDirectory = transcriber.modelStorageDirectory(),
         )
@@ -40,6 +42,11 @@ class VoiceAssistantViewModel(
     }
 
     fun refreshModelState() {
+        if (!nativeSupport.isSupported) {
+            updateUnsupportedDeviceState()
+            return
+        }
+
         if (transcriber.isModelDownloaded()) {
             initializeModel()
         } else {
@@ -56,6 +63,11 @@ class VoiceAssistantViewModel(
     }
 
     fun downloadModel() {
+        if (!nativeSupport.isSupported) {
+            updateUnsupportedDeviceState()
+            return
+        }
+
         if (_uiState.value.modelState == VoiceModelState.Downloading) return
 
         viewModelScope.launch {
@@ -131,6 +143,11 @@ class VoiceAssistantViewModel(
     }
 
     fun startListening(hasMicrophonePermission: Boolean) {
+        if (!nativeSupport.isSupported) {
+            updateUnsupportedDeviceState()
+            return
+        }
+
         if (!hasMicrophonePermission) {
             updateState {
                 it.copy(
@@ -228,6 +245,11 @@ class VoiceAssistantViewModel(
     }
 
     private fun initializeModel() {
+        if (!nativeSupport.isSupported) {
+            updateUnsupportedDeviceState()
+            return
+        }
+
         if (_uiState.value.modelState == VoiceModelState.Initializing) return
 
         viewModelScope.launch {
@@ -263,6 +285,12 @@ class VoiceAssistantViewModel(
             delay(LiveTranscriptionIntervalMs)
             val audioSnapshot = audioBuffer.snapshot()
             if (audioSnapshot.size < LocalAudioRecorder.MinimumTranscriptionBytes) continue
+
+            // Simple RMS check to avoid transcribing pure silence/noise which triggers hallucinations
+            if (!hasSignificantAudio(audioSnapshot)) {
+                delay(LiveTranscriptionIntervalMs)
+                continue
+            }
 
             updateStateIfActive(activeSession) {
                 it.copy(
@@ -376,10 +404,24 @@ class VoiceAssistantViewModel(
     private fun updateModelFailure(throwable: Throwable, fallback: String) {
         updateState {
             it.copy(
+                isDeviceSupported = nativeSupport.isSupported,
                 modelState = VoiceModelState.Failed,
                 captureState = VoiceCaptureState.Idle,
                 statusMessage = fallback,
                 errorMessage = throwable.toFriendlyMessage(fallback),
+                modelStorageDirectory = transcriber.modelStorageDirectory(),
+            )
+        }
+    }
+
+    private fun updateUnsupportedDeviceState() {
+        updateState {
+            it.copy(
+                isDeviceSupported = false,
+                modelState = VoiceModelState.Failed,
+                captureState = VoiceCaptureState.Idle,
+                statusMessage = "Local Cactus Whisper STT is not supported on this CPU.",
+                errorMessage = nativeSupport.message,
                 modelStorageDirectory = transcriber.modelStorageDirectory(),
             )
         }
@@ -398,6 +440,18 @@ class VoiceAssistantViewModel(
         }
     }
 
+    private fun hasSignificantAudio(audio: ByteArray): Boolean {
+        if (audio.isEmpty()) return false
+        var sum = 0.0
+        // Sample every 10th short for performance
+        for (i in 0 until audio.size - 1 step 20) {
+            val sample = ((audio[i+1].toInt() shl 8) or (audio[i].toInt() and 0xFF)).toShort()
+            sum += sample.toDouble() * sample.toDouble()
+        }
+        val rms = Math.sqrt(sum / (audio.size / 20.0))
+        return rms > 1000.0 // Higher threshold to avoid triggering on fan noise or background static
+    }
+
     override fun onCleared() {
         cancelActiveWork()
         transcriber.close()
@@ -405,7 +459,7 @@ class VoiceAssistantViewModel(
     }
 
     private companion object {
-        const val LiveTranscriptionIntervalMs = 1_500L
+        const val LiveTranscriptionIntervalMs = 2_500L
     }
 }
 

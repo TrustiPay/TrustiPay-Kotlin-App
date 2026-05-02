@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -47,31 +48,33 @@ fun TrustiPayApp() {
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
     var showVoiceAssistant by rememberSaveable { mutableStateOf(false) }
 
-    NavigationSuiteScaffold(
-        navigationSuiteItems = {
-            AppDestinations.entries.forEach {
-                item(
-                    icon = {
-                        Icon(
-                            imageVector = it.icon,
-                            contentDescription = it.label
-                        )
-                    },
-                    label = { Text(it.label) },
-                    selected = it == currentDestination,
-                    onClick = { currentDestination = it }
-                )
+    Box(modifier = Modifier.fillMaxSize()) {
+        NavigationSuiteScaffold(
+            navigationSuiteItems = {
+                AppDestinations.entries.forEach {
+                    item(
+                        icon = {
+                            Icon(
+                                imageVector = it.icon,
+                                contentDescription = it.label
+                            )
+                        },
+                        label = { Text(it.label) },
+                        selected = it == currentDestination,
+                        onClick = { currentDestination = it }
+                    )
+                }
             }
-        }
-    ) {
-        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-            when (currentDestination) {
-                AppDestinations.HOME -> HomeScreen(
-                    modifier = Modifier.padding(innerPadding),
-                    onVoiceClick = { showVoiceAssistant = true }
-                )
-                AppDestinations.HISTORY -> PlaceholderScreen("Transaction History", Modifier.padding(innerPadding))
-                AppDestinations.PROFILE -> PlaceholderScreen("User Profile", Modifier.padding(innerPadding))
+        ) {
+            Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                when (currentDestination) {
+                    AppDestinations.HOME -> HomeScreen(
+                        modifier = Modifier.padding(innerPadding),
+                        onVoiceClick = { showVoiceAssistant = true }
+                    )
+                    AppDestinations.HISTORY -> PlaceholderScreen("Transaction History", Modifier.padding(innerPadding))
+                    AppDestinations.PROFILE -> PlaceholderScreen("User Profile", Modifier.padding(innerPadding))
+                }
             }
         }
 

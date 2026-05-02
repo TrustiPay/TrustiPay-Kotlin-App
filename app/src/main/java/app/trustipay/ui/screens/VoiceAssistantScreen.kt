@@ -284,7 +284,11 @@ private fun ModelSetupPanel(
                 textAlign = TextAlign.Center
             )
             Text(
-                text = "The model is stored in app-specific storage and excluded from backup.",
+                text = if (uiState.isDeviceSupported) {
+                    "The model is stored in app-specific storage and excluded from backup."
+                } else {
+                    "This app did not start native transcription, so it will not crash."
+                },
                 color = Color.White.copy(alpha = 0.55f),
                 style = MaterialTheme.typography.labelSmall,
                 textAlign = TextAlign.Center

@@ -4,6 +4,7 @@ data class VoiceAssistantUiState(
     val modelName: String,
     val modelState: VoiceModelState = VoiceModelState.Missing,
     val captureState: VoiceCaptureState = VoiceCaptureState.Idle,
+    val isDeviceSupported: Boolean = true,
     val transcript: String = "",
     val languageLabel: String = "Not detected",
     val statusMessage: String = "Voice model setup is required.",
@@ -16,7 +17,8 @@ data class VoiceAssistantUiState(
             captureState == VoiceCaptureState.Finalizing
 
     val canDownloadModel: Boolean
-        get() = modelState == VoiceModelState.Missing || modelState == VoiceModelState.Failed
+        get() = isDeviceSupported &&
+            (modelState == VoiceModelState.Missing || modelState == VoiceModelState.Failed)
 
     val canDeleteModel: Boolean
         get() = modelState == VoiceModelState.Ready ||
@@ -24,7 +26,8 @@ data class VoiceAssistantUiState(
             modelState == VoiceModelState.Failed
 
     val canRequestRecording: Boolean
-        get() = modelState == VoiceModelState.Ready &&
+        get() = isDeviceSupported &&
+            modelState == VoiceModelState.Ready &&
             captureState != VoiceCaptureState.Listening &&
             captureState != VoiceCaptureState.LiveTranscribing &&
             captureState != VoiceCaptureState.Finalizing
