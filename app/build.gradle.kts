@@ -77,6 +77,7 @@ dependencies {
     implementation(libs.cactus)
     implementation(libs.mediapipe.genai)
     implementation(libs.vosk.android)
+    implementation(libs.vosk.model.en)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

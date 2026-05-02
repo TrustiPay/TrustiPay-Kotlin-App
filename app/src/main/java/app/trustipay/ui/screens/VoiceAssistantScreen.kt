@@ -357,9 +357,11 @@ private fun StatusFooter(
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.Center
     ) {
         if (uiState.isBusy || uiState.captureState == VoiceCaptureState.LiveTranscribing) {
             CircularProgressIndicator(
@@ -367,11 +369,13 @@ private fun StatusFooter(
                 color = TrustiPayTertiary,
                 strokeWidth = 2.dp
             )
+            Spacer(modifier = Modifier.size(8.dp))
         }
         Text(
-            text = "100% on-device transcription",
+            text = uiState.liveTranscriptionLabel,
             color = Color.White.copy(alpha = 0.5f),
-            style = MaterialTheme.typography.labelSmall
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center
         )
     }
 }

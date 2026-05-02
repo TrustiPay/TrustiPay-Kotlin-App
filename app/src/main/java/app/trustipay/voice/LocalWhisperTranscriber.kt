@@ -145,7 +145,10 @@ class LocalWhisperTranscriber(
         return false
     }
 
-    suspend fun transcribe(audioBuffer: ByteArray): String = transcribeLive(audioBuffer)
+    suspend fun transcribe(
+        audioBuffer: ByteArray,
+        onPartialText: suspend (String) -> Unit = {},
+    ): String = transcribeLive(audioBuffer, onPartialText)
 
     override fun close() {
         stt.reset()

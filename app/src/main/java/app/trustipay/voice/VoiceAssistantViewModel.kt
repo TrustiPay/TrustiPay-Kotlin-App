@@ -3,6 +3,7 @@ package app.trustipay.voice
 import android.app.Application
 import app.trustipay.BuildConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 
@@ -31,6 +33,7 @@ class VoiceAssistantViewModel(
             isDeviceSupported = nativeSupport.isSupported,
             statusMessage = "Checking local voice model...",
             modelStorageDirectory = transcriber.modelStorageDirectory(),
+            liveTranscriptionLabel = onDevicePipelineLabel(),
         )
     )
     val uiState: StateFlow<VoiceAssistantUiState> = _uiState.asStateFlow()
@@ -52,8 +55,11 @@ class VoiceAssistantViewModel(
 
         if (transcriber.isModelDownloaded()) {
             initializeModel()
-            llmBrain.initialize()
-            viewModelScope.launch { voskTranscriber.initialize() }
+            viewModelScope.launch(Dispatchers.IO) {
+                llmBrain.initialize()
+                // Refresh status message once LLM is ready or fails
+                updateState { it.copy(statusMessage = readyStatusMessage()) }
+            }
         } else {
             updateState {
                 it.copy(
@@ -62,6 +68,7 @@ class VoiceAssistantViewModel(
                     statusMessage = "Download $modelName to enable local Sinhala and English voice requests.",
                     errorMessage = null,
                     modelStorageDirectory = transcriber.modelStorageDirectory(),
+                    liveTranscriptionLabel = onDevicePipelineLabel(),
                 )
             }
         }
@@ -97,8 +104,10 @@ class VoiceAssistantViewModel(
                     )
                 }
                 initializeModel()
-                llmBrain.initialize()
-                viewModelScope.launch { voskTranscriber.initialize() }
+                withContext(Dispatchers.IO) {
+                    llmBrain.initialize()
+                }
+                updateState { it.copy(statusMessage = readyStatusMessage()) }
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 updateModelFailure(throwable, "Voice model download failed.")
@@ -124,6 +133,7 @@ class VoiceAssistantViewModel(
                     },
                     errorMessage = null,
                     modelStorageDirectory = transcriber.modelStorageDirectory(),
+                    liveTranscriptionLabel = onDevicePipelineLabel(),
                 )
             }
         }
@@ -142,8 +152,9 @@ class VoiceAssistantViewModel(
             updateState {
                 it.copy(
                     captureState = VoiceCaptureState.Idle,
-                    statusMessage = "Ready. Tap Start and speak in Sinhala or English.",
+                    statusMessage = readyStatusMessage(voskTranscriber.status()),
                     errorMessage = null,
+                    liveTranscriptionLabel = onDevicePipelineLabel(),
                 )
             }
         }
@@ -183,30 +194,44 @@ class VoiceAssistantViewModel(
         val activeSession = sessionId
         audioBuffer.clear()
         lastLiveSpeechBytes = 0
+        if (voskTranscriber.isReady) {
+            voskTranscriber.resetSession()
+        }
+        val useVoskLive = voskTranscriber.isReady
 
         updateState {
             it.copy(
                 captureState = VoiceCaptureState.Listening,
                 transcript = "",
                 languageLabel = "Not detected",
-                statusMessage = "Listening locally. Live text will appear as you speak.",
+                statusMessage = if (useVoskLive) {
+                    "Listening locally. Vosk live text will appear as you speak."
+                } else {
+                    "Listening locally. Whisper preview will appear when enough speech is captured."
+                },
                 errorMessage = null,
+                liveTranscriptionLabel = onDevicePipelineLabel(),
             )
         }
 
         liveTranscriptionJob?.cancel()
-        liveTranscriptionJob = viewModelScope.launch {
-            runLiveTranscriptionLoop(activeSession)
+        liveTranscriptionJob = if (useVoskLive) {
+            null
+        } else {
+            viewModelScope.launch {
+                runLiveTranscriptionLoop(activeSession)
+            }
         }
 
         recordingJob = viewModelScope.launch {
             try {
                 val recording = recorder.recordUntilStopped { chunk ->
                     audioBuffer.append(chunk)
-                    // Layer 1: Vosk Live Transcription
-                    val liveText = voskTranscriber.feedAudio(chunk, chunk.size)
-                    if (liveText.isNotBlank()) {
-                        updateTranscriptIfActive(activeSession, liveText)
+                    if (useVoskLive) {
+                        val liveText = voskTranscriber.feedAudio(chunk, chunk.size)
+                        if (liveText.isNotBlank()) {
+                            updateTranscriptIfActive(activeSession, liveText)
+                        }
                     }
                 }
 
@@ -247,8 +272,9 @@ class VoiceAssistantViewModel(
             updateState {
                 it.copy(
                     captureState = VoiceCaptureState.Idle,
-                    statusMessage = "Ready. Tap Start and speak in Sinhala or English.",
+                    statusMessage = readyStatusMessage(voskTranscriber.status()),
                     errorMessage = null,
+                    liveTranscriptionLabel = onDevicePipelineLabel(),
                 )
             }
         }
@@ -278,14 +304,35 @@ class VoiceAssistantViewModel(
                     it.copy(
                         modelState = VoiceModelState.Ready,
                         captureState = VoiceCaptureState.Idle,
-                        statusMessage = "Ready. Tap Start and speak in Sinhala or English.",
+                        statusMessage = readyStatusMessage(voskTranscriber.status()),
                         errorMessage = null,
                         modelStorageDirectory = transcriber.modelStorageDirectory(),
+                        liveTranscriptionLabel = onDevicePipelineLabel(),
                     )
                 }
+                initializeVoskLiveTranscriber()
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 updateModelFailure(throwable, "Voice model initialization failed.")
+            }
+        }
+    }
+
+    private fun initializeVoskLiveTranscriber() {
+        viewModelScope.launch {
+            val liveStatus = voskTranscriber.initialize()
+            updateState {
+                if (it.modelState != VoiceModelState.Ready ||
+                    it.captureState != VoiceCaptureState.Idle
+                ) {
+                    it.copy(liveTranscriptionLabel = onDevicePipelineLabel(liveStatus))
+                } else {
+                    it.copy(
+                        statusMessage = readyStatusMessage(liveStatus),
+                        errorMessage = null,
+                        liveTranscriptionLabel = onDevicePipelineLabel(liveStatus),
+                    )
+                }
             }
         }
     }
@@ -303,7 +350,7 @@ class VoiceAssistantViewModel(
             updateStateIfActive(activeSession) {
                 it.copy(
                     captureState = VoiceCaptureState.LiveTranscribing,
-                    statusMessage = "Live transcribing on device...",
+                    statusMessage = "Creating Whisper live preview on device...",
                     errorMessage = null,
                 )
             }
@@ -319,7 +366,7 @@ class VoiceAssistantViewModel(
                 updateStateIfActive(activeSession) {
                     it.copy(
                         captureState = VoiceCaptureState.Listening,
-                        statusMessage = "Listening locally. Updating live transcript...",
+                        statusMessage = "Listening locally. Updating Whisper preview...",
                         errorMessage = null,
                     )
                 }
@@ -328,7 +375,7 @@ class VoiceAssistantViewModel(
                 updateStateIfActive(activeSession) {
                     it.copy(
                         captureState = VoiceCaptureState.Listening,
-                        statusMessage = "Listening locally. Live transcription will retry...",
+                        statusMessage = "Listening locally. Whisper preview will retry...",
                         errorMessage = throwable.toFriendlyMessage("Live transcription failed."),
                     )
                 }
@@ -358,16 +405,16 @@ class VoiceAssistantViewModel(
             it.copy(
                 captureState = VoiceCaptureState.Finalizing,
                 statusMessage = if (reachedMaxDuration) {
-                    "Maximum recording length reached. Finalizing transcript on device..."
+                    "Maximum recording length reached. Finalizing with $modelName..."
                 } else {
-                    "Finalizing transcript on device..."
+                    "Finalizing with $modelName..."
                 },
                 errorMessage = null,
             )
         }
 
         try {
-            val finalText = transcriber.transcribeLive(audio) { partialText ->
+            val finalText = transcriber.transcribe(audio) { partialText ->
                 updateTranscriptIfActive(activeSession, partialText)
             }
             if (activeSession != sessionId) return
@@ -405,6 +452,7 @@ class VoiceAssistantViewModel(
                             "Captured locally."
                         },
                         errorMessage = null,
+                        liveTranscriptionLabel = onDevicePipelineLabel(),
                     )
                 }
             } else {
@@ -415,6 +463,7 @@ class VoiceAssistantViewModel(
                         languageLabel = "Not detected",
                         statusMessage = "No speech was recognized. Try again closer to the microphone.",
                         errorMessage = null,
+                        liveTranscriptionLabel = onDevicePipelineLabel(),
                     )
                 }
             }
@@ -451,6 +500,7 @@ class VoiceAssistantViewModel(
                 statusMessage = fallback,
                 errorMessage = throwable.toFriendlyMessage(fallback),
                 modelStorageDirectory = transcriber.modelStorageDirectory(),
+                liveTranscriptionLabel = onDevicePipelineLabel(),
             )
         }
     }
@@ -464,6 +514,7 @@ class VoiceAssistantViewModel(
                 statusMessage = "Local Cactus Whisper STT is not supported on this CPU.",
                 errorMessage = nativeSupport.message,
                 modelStorageDirectory = transcriber.modelStorageDirectory(),
+                liveTranscriptionLabel = onDevicePipelineLabel(),
             )
         }
     }
@@ -479,6 +530,32 @@ class VoiceAssistantViewModel(
         if (activeSession == sessionId) {
             updateState(transform)
         }
+    }
+
+    private fun readyStatusMessage(
+        liveStatus: VoskLiveStatus = voskTranscriber.status(),
+    ): String {
+        val baseMessage = when {
+            liveStatus.isReady -> "Ready. Vosk live preview and $modelName finalization are available."
+            liveStatus == VoskLiveStatus.NotInitialized ||
+                liveStatus == VoskLiveStatus.Initializing ->
+                "Ready. Preparing Vosk live preview; $modelName finalization is available."
+            else -> "Ready. $modelName finalization is available; ${liveStatus.message}"
+        }
+        
+        return if (llmBrain.isModelAvailable()) {
+            baseMessage
+        } else {
+            "$baseMessage (Note: LLM model not found for request analysis)"
+        }
+    }
+
+    private fun onDevicePipelineLabel(
+        liveStatus: VoskLiveStatus = voskTranscriber.status(),
+    ): String = if (liveStatus.isReady) {
+        "Vosk live + $modelName finalization"
+    } else {
+        "$modelName finalization on device"
     }
 
     override fun onCleared() {

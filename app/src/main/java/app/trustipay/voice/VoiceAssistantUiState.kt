@@ -10,6 +10,7 @@ data class VoiceAssistantUiState(
     val statusMessage: String = "Voice model setup is required.",
     val errorMessage: String? = null,
     val modelStorageDirectory: String = "",
+    val liveTranscriptionLabel: String = "Whisper finalization on device",
 ) {
     val isBusy: Boolean
         get() = modelState == VoiceModelState.Downloading ||
