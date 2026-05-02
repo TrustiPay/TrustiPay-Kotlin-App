@@ -7,11 +7,12 @@ import com.cactus.CactusTranscriptionParams
 import com.cactus.TranscriptionMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 class LocalWhisperTranscriber(
     private val modelSlug: String,
@@ -49,76 +50,99 @@ class LocalWhisperTranscriber(
         }
 
         transcriptionMutex.withLock {
-            val callbackScope = this@coroutineScope
-            val partialLock = Any()
-            var partialText = ""
+            val speechAudio = PcmAudioPreprocessor.trimToSpeech(audioBuffer)
+            if (speechAudio.isEmpty()) return@withLock ""
+            val speechDurationSeconds = PcmAudioPreprocessor.durationSeconds(speechAudio)
 
             val result = withContext(Dispatchers.IO) {
-                try {
-                    stt.transcribe(
-                        prompt = MultilingualPrompt,
-                        params = CactusTranscriptionParams(model = modelSlug),
-                        mode = TranscriptionMode.LOCAL,
-                        audioBuffer = audioBuffer,
-                        onToken = { token, _ ->
-                            if (token.isNotBlank()) {
-                                val nextText = synchronized(partialLock) {
-                                    partialText += token
-                                    partialText.trim()
-                                }
-                                callbackScope.launch(Dispatchers.Main) {
-                                    onPartialText(sanitizeWhisperHallucination(nextText))
-                                }
-                            }
-                        },
-                    )
-                } catch (e: Exception) {
-                    null
-                }
-            } ?: error("Cactus STT returned null result or crashed.")
+                stt.transcribe(
+                    prompt = MultilingualPrompt,
+                    params = CactusTranscriptionParams(model = modelSlug),
+                    mode = TranscriptionMode.LOCAL,
+                    audioBuffer = speechAudio,
+                    onToken = null,
+                )
+            } ?: error("Cactus STT returned null result or crashed. Internal state reset performed.")
 
             if (!result.success) {
                 val errorMsg = result.errorMessage ?: "Unknown error"
                 error("Transcription failed: $errorMsg")
             }
 
-            val rawText = result.text?.trim().orEmpty().ifBlank {
-                synchronized(partialLock) { partialText.trim() }
+            val cleanText = sanitizeWhisperHallucination(
+                text = result.text?.trim().orEmpty(),
+                audioDurationSeconds = speechDurationSeconds,
+            )
+            if (cleanText.isNotBlank()) {
+                onPartialText(cleanText)
             }
-            sanitizeWhisperHallucination(rawText)
+            cleanText
         }
     }
 
-    private fun sanitizeWhisperHallucination(text: String): String {
-        // Strip out Whisper internal tokens like <|startoftranscript|> if they leak
-        val cleaned = text.replace(Regex("<\\|.*?\\|>"), "").trim()
-        
+    private fun sanitizeWhisperHallucination(
+        text: String,
+        audioDurationSeconds: Double,
+    ): String {
+        val cleaned = text
+            .replace(Regex("<\\|.*?\\|>"), "")
+            .replace(Regex("</?[^>]+>"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
         if (cleaned.isEmpty()) return ""
         
-        // 1. Block known short hallucinations and common noise markers
-        val normalized = cleaned.lowercase().replace(Regex("[.\\s]"), "")
-        val knownHallucinations = setOf("(", "[", "]", "...", "thankyou", "subtitles", "you", "thanksforwatching", "hello")
-        if (knownHallucinations.contains(normalized) || cleaned.length < 2) return ""
-
-        // 2. Character-level repetition check
-        val charCounts = cleaned.groupingBy { it }.eachCount()
-        val mostFrequentChar = charCounts.maxByOrNull { it.value }
-        if (mostFrequentChar != null && mostFrequentChar.value > cleaned.length * 0.4) {
-            val distinctChars = charCounts.size
-            if (distinctChars < 4 && cleaned.length > 5) return ""
+        val normalized = cleaned.lowercase().replace(Regex("[.\\s/_-]"), "")
+        val knownHallucinations = setOf(
+            "(", "[", "]", "...", "thankyou", "subtitles", "you", "thanksforwatching", 
+            "hello", "insin", "insinhala", "inthesame", "thesamefor", "divdivdiv", "div", "(c)", "c", ""
+        )
+        if (knownHallucinations.contains(normalized) ||
+            cleaned.all { it == '.' || it == ' ' || it == '/' || it == '(' || it == ')' } ||
+            cleaned.length < 2 ||
+            (cleaned.startsWith("(") && cleaned.endsWith(")") && cleaned.length < 5)
+        ) {
+            return ""
         }
 
-        // 3. Word-level repetition check
-        val words = cleaned.split(Regex("[\\s.,!?]+")).filter { it.isNotBlank() }
-        if (words.size > 3) {
+        if (Regex("(?i)(\\bdiv\\b[\\s/.,]*){3,}").containsMatchIn(cleaned)) return ""
+        if (Regex("(?i)(the same for\\s*){2,}").containsMatchIn(cleaned)) return ""
+
+        val words = cleaned.split(Regex("[\\s.,!?/]+")).filter { it.isNotBlank() }
+        val maxReasonableWords = max(12, (audioDurationSeconds * 4.8).roundToInt() + 6)
+        if (words.size > maxReasonableWords && isLoopingTranscript(words)) return ""
+
+        if (words.size > 4) {
+            if (isLoopingTranscript(words)) return ""
+        }
+
+        if (words.size > 2) {
             val wordCounts = words.groupingBy { it.lowercase() }.eachCount()
             val mostFrequentWord = wordCounts.maxByOrNull { it.value }!!
-            
-            // If a single word makes up more than 50% of the transcript, it's a loop
-            if (mostFrequentWord.value > words.size * 0.5) return ""
+            if (mostFrequentWord.value > words.size * 0.42 && mostFrequentWord.key.length > 2) return ""
+        }
+
+        val charCounts = cleaned.groupingBy { it }.eachCount()
+        val mostFrequentChar = charCounts.maxByOrNull { it.value }
+        if (mostFrequentChar != null && mostFrequentChar.value > cleaned.length * 0.3) { 
+            val distinctChars = charCounts.size
+            if (distinctChars < 4 && cleaned.length > 3) return ""
         }
         
         return cleaned
+    }
+
+    private fun isLoopingTranscript(words: List<String>): Boolean {
+        val normalizedWords = words.map { it.lowercase() }
+        for (gramSize in 1..5) {
+            if (normalizedWords.size < gramSize * 3) continue
+            val nGrams = normalizedWords.windowed(gramSize).map { it.joinToString(" ") }
+            val mostCommon = nGrams.groupingBy { it }.eachCount().maxByOrNull { it.value } ?: continue
+            val coveredWords = mostCommon.value * gramSize
+            if (mostCommon.value >= 3 && coveredWords >= normalizedWords.size * 0.45) {
+                return true
+            }
+        }
+        return false
     }
 
     suspend fun transcribe(audioBuffer: ByteArray): String = transcribeLive(audioBuffer)
@@ -128,7 +152,6 @@ class LocalWhisperTranscriber(
     }
 
     private companion object {
-        // Using natural language for the initial prompt instead of internal tokens
-        const val MultilingualPrompt = "Transcription of a voice request in Sinhala or English."
+        const val MultilingualPrompt = "<|startoftranscript|><|transcribe|><|notimestamps|>"
     }
 }

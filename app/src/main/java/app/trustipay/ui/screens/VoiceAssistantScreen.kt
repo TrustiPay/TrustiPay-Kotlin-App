@@ -19,10 +19,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -173,14 +176,21 @@ private fun TranscriptPanel(uiState: VoiceAssistantUiState) {
         shape = RoundedCornerShape(8.dp)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .padding(16.dp)
+                .heightIn(max = 360.dp)
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
                 text = uiState.transcript.ifBlank { "Tap Start and speak in Sinhala or English." },
                 color = Color.White,
-                style = MaterialTheme.typography.headlineSmall,
+                style = if (uiState.transcript.length > 120) {
+                    MaterialTheme.typography.bodyLarge
+                } else {
+                    MaterialTheme.typography.headlineSmall
+                },
                 textAlign = TextAlign.Center,
                 fontWeight = FontWeight.Bold
             )

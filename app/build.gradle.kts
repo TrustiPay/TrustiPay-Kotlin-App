@@ -10,7 +10,7 @@ fun String.asBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 val trustiPaySttModel = providers.gradleProperty("trustiPaySttModel")
-    .orElse("whisper-base")
+    .orElse("whisper-small")
     .get()
 
 java {
@@ -75,6 +75,8 @@ dependencies {
     implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.cactus)
+    implementation(libs.mediapipe.genai)
+    implementation(libs.vosk.android)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

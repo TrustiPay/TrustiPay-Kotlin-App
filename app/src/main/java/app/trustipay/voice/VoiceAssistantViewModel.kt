@@ -20,6 +20,8 @@ class VoiceAssistantViewModel(
     private val modelName = BuildConfig.TRUSTIPAY_STT_MODEL
     private val recorder = LocalAudioRecorder()
     private val transcriber = LocalWhisperTranscriber(modelName)
+    private val voskTranscriber = VoskLiveTranscriber(application)
+    private val llmBrain = LocalLlmBrain(application)
     private val audioBuffer = RollingPcmBuffer(LocalAudioRecorder.MaxRecordingBytes)
     private val nativeSupport = NativeTranscriptionCompatibility.check()
 
@@ -35,6 +37,7 @@ class VoiceAssistantViewModel(
 
     private var recordingJob: Job? = null
     private var liveTranscriptionJob: Job? = null
+    private var lastLiveSpeechBytes = 0
     private var sessionId = 0
 
     init {
@@ -49,6 +52,8 @@ class VoiceAssistantViewModel(
 
         if (transcriber.isModelDownloaded()) {
             initializeModel()
+            llmBrain.initialize()
+            viewModelScope.launch { voskTranscriber.initialize() }
         } else {
             updateState {
                 it.copy(
@@ -92,6 +97,8 @@ class VoiceAssistantViewModel(
                     )
                 }
                 initializeModel()
+                llmBrain.initialize()
+                viewModelScope.launch { voskTranscriber.initialize() }
             } catch (throwable: Throwable) {
                 if (throwable is CancellationException) throw throwable
                 updateModelFailure(throwable, "Voice model download failed.")
@@ -175,6 +182,7 @@ class VoiceAssistantViewModel(
         sessionId += 1
         val activeSession = sessionId
         audioBuffer.clear()
+        lastLiveSpeechBytes = 0
 
         updateState {
             it.copy(
@@ -195,10 +203,12 @@ class VoiceAssistantViewModel(
             try {
                 val recording = recorder.recordUntilStopped { chunk ->
                     audioBuffer.append(chunk)
+                    // Layer 1: Vosk Live Transcription
+                    val liveText = voskTranscriber.feedAudio(chunk, chunk.size)
+                    if (liveText.isNotBlank()) {
+                        updateTranscriptIfActive(activeSession, liveText)
+                    }
                 }
-
-                liveTranscriptionJob?.cancel()
-                liveTranscriptionJob = null
 
                 sessionId += 1
                 finalizeTranscription(sessionId, recording.audio, recording.reachedMaxDuration)
@@ -286,11 +296,9 @@ class VoiceAssistantViewModel(
             val audioSnapshot = audioBuffer.snapshot()
             if (audioSnapshot.size < LocalAudioRecorder.MinimumTranscriptionBytes) continue
 
-            // Simple RMS check to avoid transcribing pure silence/noise which triggers hallucinations
-            if (!hasSignificantAudio(audioSnapshot)) {
-                delay(LiveTranscriptionIntervalMs)
-                continue
-            }
+            val speechSnapshot = PcmAudioPreprocessor.trimToSpeech(audioSnapshot)
+            if (speechSnapshot.size < PcmAudioPreprocessor.MinimumSpeechBytes) continue
+            if (speechSnapshot.size < lastLiveSpeechBytes + MinimumNewSpeechBytesForLiveUpdate) continue
 
             updateStateIfActive(activeSession) {
                 it.copy(
@@ -301,10 +309,13 @@ class VoiceAssistantViewModel(
             }
 
             try {
-                val text = transcriber.transcribeLive(audioSnapshot) { partialText ->
+                val text = transcriber.transcribeLive(speechSnapshot) { partialText ->
                     updateTranscriptIfActive(activeSession, partialText)
                 }
-                updateTranscriptIfActive(activeSession, text)
+                if (text.isNotBlank()) {
+                    lastLiveSpeechBytes = speechSnapshot.size
+                    updateTranscriptIfActive(activeSession, text)
+                }
                 updateStateIfActive(activeSession) {
                     it.copy(
                         captureState = VoiceCaptureState.Listening,
@@ -361,21 +372,51 @@ class VoiceAssistantViewModel(
             }
             if (activeSession != sessionId) return
 
-            val cleanText = finalText.trim()
-            updateState {
-                it.copy(
-                    captureState = VoiceCaptureState.Idle,
-                    transcript = cleanText,
-                    languageLabel = detectLanguageLabel(cleanText),
-                    statusMessage = if (cleanText.isBlank()) {
-                        "No speech was recognized. Try again closer to the microphone."
-                    } else if (reachedMaxDuration) {
-                        "Captured locally with $modelName. Recording stopped at the 30 second limit."
-                    } else {
-                        "Captured locally with $modelName."
-                    },
-                    errorMessage = null,
-                )
+            val cleanText = finalText.trim().ifBlank {
+                _uiState.value.transcript.trim()
+            }
+            
+            if (cleanText.isNotBlank()) {
+                updateState {
+                    it.copy(
+                        statusMessage = "Understanding your request...",
+                        transcript = cleanText,
+                        languageLabel = detectLanguageLabel(cleanText)
+                    )
+                }
+                
+                val llmResult = llmBrain.processRequest(cleanText)
+                
+                // If LLM fails or is not ready, we still show the transcript but with a warning
+                val finalDisplay = if (llmResult.contains("error")) {
+                    "Analysis paused: $llmResult\n\nRaw transcript: $cleanText"
+                } else {
+                    llmResult
+                }
+
+                updateState {
+                    it.copy(
+                        captureState = VoiceCaptureState.Idle,
+                        transcript = finalDisplay,
+                        languageLabel = detectLanguageLabel(cleanText),
+                        statusMessage = if (reachedMaxDuration) {
+                            "Captured locally. Recording stopped at the 30 second limit."
+                        } else {
+                            "Captured locally."
+                        },
+                        errorMessage = null,
+                    )
+                }
+            } else {
+                updateState {
+                    it.copy(
+                        captureState = VoiceCaptureState.Idle,
+                        transcript = "",
+                        languageLabel = "Not detected",
+                        statusMessage = "No speech was recognized. Try again closer to the microphone.",
+                        errorMessage = null,
+                    )
+                }
             }
         } catch (throwable: Throwable) {
             if (throwable is CancellationException) throw throwable
@@ -440,26 +481,17 @@ class VoiceAssistantViewModel(
         }
     }
 
-    private fun hasSignificantAudio(audio: ByteArray): Boolean {
-        if (audio.isEmpty()) return false
-        var sum = 0.0
-        // Sample every 10th short for performance
-        for (i in 0 until audio.size - 1 step 20) {
-            val sample = ((audio[i+1].toInt() shl 8) or (audio[i].toInt() and 0xFF)).toShort()
-            sum += sample.toDouble() * sample.toDouble()
-        }
-        val rms = Math.sqrt(sum / (audio.size / 20.0))
-        return rms > 1000.0 // Higher threshold to avoid triggering on fan noise or background static
-    }
-
     override fun onCleared() {
         cancelActiveWork()
         transcriber.close()
+        voskTranscriber.close()
+        llmBrain.close()
         super.onCleared()
     }
 
     private companion object {
         const val LiveTranscriptionIntervalMs = 2_500L
+        const val MinimumNewSpeechBytesForLiveUpdate = 12_000
     }
 }
 
