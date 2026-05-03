@@ -33,6 +33,15 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "TRUSTIPAY_STT_MODEL", trustiPaySttModel.asBuildConfigString())
+        buildConfigField("boolean", "OFFLINE_PAYMENTS_ENABLED", "true")
+        buildConfigField("boolean", "OFFLINE_TOKEN_WALLET_ENABLED", "true")
+        buildConfigField("boolean", "OFFLINE_SYNC_ENABLED", "true")
+        buildConfigField("boolean", "TRANSPORT_QR_ENABLED", "true")
+        buildConfigField("boolean", "TRANSPORT_BLE_ENABLED", "true")
+        buildConfigField("boolean", "TRANSPORT_WIFI_DIRECT_ENABLED", "true")
+        buildConfigField("boolean", "TRANSPORT_NFC_ENABLED", "true")
+        buildConfigField("boolean", "OFFLINE_SETTLEMENT_SHADOW_MODE", "true")
+        buildConfigField("boolean", "OFFLINE_SETTLEMENT_LIVE_MODE", "false")
     }
 
     buildTypes {
