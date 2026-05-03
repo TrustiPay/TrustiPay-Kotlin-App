@@ -158,7 +158,7 @@ class LocalLlmBrain internal constructor(
     }
 
     private fun externalMediaDirectories(): List<File> =
-        runCatching { appContext.externalMediaDirs.toList() }.getOrDefault(emptyList())
+        runCatching { appContext.getExternalFilesDirs(null).filterNotNull() }.getOrDefault(emptyList())
 
     private fun List<File>.firstExistingNamedModel(): File? {
         for (directory in this) {

@@ -13,20 +13,14 @@ val trustiPaySttModel = providers.gradleProperty("trustiPaySttModel")
     .orElse("whisper-small")
     .get()
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
-    }
-}
-
 android {
     namespace = "app.trustipay"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "app.trustipay"
         minSdk = 29
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
@@ -64,7 +58,6 @@ android {
 }
 
 kotlin {
-    jvmToolchain(21)
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_21)
     }
@@ -86,7 +79,6 @@ dependencies {
     implementation(libs.cactus)
     implementation(libs.litertlm.android)
     implementation(libs.vosk.android)
-    implementation(libs.vosk.model.en)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/chinthana/.local/share/**)",
+      "Read(//home/chinthana/Android/Sdk/**)",
+      "Read(//home/**)"
+    ]
+  }
+}
