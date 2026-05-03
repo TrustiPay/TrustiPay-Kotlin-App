@@ -18,6 +18,7 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -26,6 +27,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import com.cactus.CactusContextInitializer
 import com.cactus.services.CactusConfig
 import app.trustipay.ui.screens.HomeScreen
+import app.trustipay.ui.screens.PaymentDraft
 import app.trustipay.ui.screens.VoiceAssistantScreen
 import app.trustipay.ui.theme.TrustiPayTheme
 
@@ -47,6 +49,8 @@ class MainActivity : ComponentActivity() {
 fun TrustiPayApp() {
     var currentDestination by rememberSaveable { mutableStateOf(AppDestinations.HOME) }
     var showVoiceAssistant by rememberSaveable { mutableStateOf(false) }
+    var voiceDraftEventId by rememberSaveable { mutableStateOf(0) }
+    var latestVoiceDraft by remember { mutableStateOf<PaymentDraft?>(null) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavigationSuiteScaffold(
@@ -70,6 +74,7 @@ fun TrustiPayApp() {
                 when (currentDestination) {
                     AppDestinations.HOME -> HomeScreen(
                         modifier = Modifier.padding(innerPadding),
+                        voiceDraft = latestVoiceDraft,
                         onVoiceClick = { showVoiceAssistant = true }
                     )
                     AppDestinations.HISTORY -> PlaceholderScreen("Transaction History", Modifier.padding(innerPadding))
@@ -79,7 +84,15 @@ fun TrustiPayApp() {
         }
 
         if (showVoiceAssistant) {
-            VoiceAssistantScreen(onClose = { showVoiceAssistant = false })
+            VoiceAssistantScreen(
+                onClose = { showVoiceAssistant = false },
+                onPaymentDraft = { draft ->
+                    voiceDraftEventId += 1
+                    latestVoiceDraft = draft.copy(eventId = voiceDraftEventId)
+                    currentDestination = AppDestinations.HOME
+                    showVoiceAssistant = false
+                }
+            )
         }
     }
 }

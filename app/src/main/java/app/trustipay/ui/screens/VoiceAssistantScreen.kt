@@ -44,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -61,14 +62,18 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.trustipay.ui.theme.TrustiPayPrimary
 import app.trustipay.ui.theme.TrustiPaySecondary
 import app.trustipay.ui.theme.TrustiPayTertiary
+import app.trustipay.voice.BankingIntent
+import app.trustipay.voice.BankingIntentType
 import app.trustipay.voice.VoiceAssistantUiState
 import app.trustipay.voice.VoiceAssistantViewModel
 import app.trustipay.voice.VoiceCaptureState
 import app.trustipay.voice.VoiceModelState
+import java.math.BigDecimal
 
 @Composable
 fun VoiceAssistantScreen(
     onClose: () -> Unit = {},
+    onPaymentDraft: (PaymentDraft) -> Unit = {},
     viewModel: VoiceAssistantViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -90,6 +95,13 @@ fun VoiceAssistantScreen(
         onDispose {
             viewModel.cancelActiveWork()
         }
+    }
+
+    LaunchedEffect(uiState.pendingBankingIntent) {
+        val bankingIntent = uiState.pendingBankingIntent ?: return@LaunchedEffect
+        val paymentDraft = bankingIntent.toPaymentDraftOrNull()
+        viewModel.consumePendingBankingIntent()
+        paymentDraft?.let(onPaymentDraft)
     }
 
     Box(
@@ -438,3 +450,21 @@ private fun screenTitle(uiState: VoiceAssistantUiState): String =
     }
 
 private fun Modifier.scale(scale: Float) = this.graphicsLayer(scaleX = scale, scaleY = scale)
+
+private fun BankingIntent.toPaymentDraftOrNull(): PaymentDraft? {
+    if (request != BankingIntentType.SendMoney) return null
+
+    val recipient = to.orEmpty().trim()
+    val amountInput = amount?.toAmountInput().orEmpty()
+    if (recipient.isBlank() && amountInput.isBlank()) return null
+
+    return PaymentDraft(
+        recipient = recipient,
+        amount = amountInput,
+        note = reason.orEmpty().trim(),
+        rawTranscript = rawTranscript,
+    )
+}
+
+private fun Double.toAmountInput(): String =
+    BigDecimal.valueOf(this).stripTrailingZeros().toPlainString()

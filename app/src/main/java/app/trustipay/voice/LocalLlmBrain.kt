@@ -1,6 +1,7 @@
 package app.trustipay.voice
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
 import com.google.ai.edge.litertlm.Backend
 import com.google.ai.edge.litertlm.Contents
@@ -47,8 +48,7 @@ class LocalLlmBrain internal constructor(
 
             val modelFile = findModelFile()
             if (modelFile == null) {
-                val searchDirs = searchDirectories().joinToString(", ") { it.absolutePath }
-                initializationError = "LiteRT-LM model file not found. Ensure one of $PreferredModelFilenames is in: $searchDirs"
+                initializationError = missingModelMessage()
                 state = LlmAnalysisState.Missing
                 return@withLock state
             }
@@ -112,24 +112,59 @@ class LocalLlmBrain internal constructor(
     }
 
     private fun findModelFile(): File? {
+        requestedModelFiles().firstOrNull { it.existsAsFile() }?.let { return it }
+
         val directories = searchDirectories()
         directories.firstExistingNamedModel()?.let { return it }
         return directories.firstExistingLiteRtLmModel()
     }
 
-    private fun searchDirectories(): List<File> = listOfNotNull(
-        File(appContext.filesDir, "models"),
-        appContext.filesDir,
-        appContext.getExternalFilesDir(null)?.let { File(it, "models") },
-        appContext.getExternalFilesDir(null),
-        File("/data/local/tmp"),
-    )
+    private fun missingModelMessage(): String {
+        val requestedPath = requestedModelFiles().firstOrNull()?.absolutePath ?: RequestedModelDisplayPath
+        val searchDirs = searchDirectories().joinToString(", ") { it.absolutePath }
+        return "LiteRT-LM model file not found. Place $RequestedModelFilename at $requestedPath, or put one of $PreferredModelFilenames in: $searchDirs"
+    }
+
+    private fun requestedModelFiles(): List<File> {
+        val files = mutableListOf<File>()
+        requestedExternalStorageModelFile()?.let(files::add)
+        externalMediaDirectories().forEach { mediaDir ->
+            files += File(File(mediaDir, ModelsDirectoryName), RequestedModelFilename)
+        }
+        return files.distinctBy { it.absolutePath }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun requestedExternalStorageModelFile(): File? =
+        runCatching { Environment.getExternalStorageDirectory() }
+            .getOrNull()
+            ?.let { File(it, RequestedModelRelativePath) }
+
+    private fun searchDirectories(): List<File> {
+        val directories = mutableListOf<File>()
+        requestedExternalStorageModelFile()?.parentFile?.let(directories::add)
+        directories += File(appContext.filesDir, ModelsDirectoryName)
+        directories += appContext.filesDir
+        appContext.getExternalFilesDir(null)?.let { externalFilesDir ->
+            directories += File(externalFilesDir, ModelsDirectoryName)
+            directories += externalFilesDir
+        }
+        externalMediaDirectories().forEach { mediaDir ->
+            directories += File(mediaDir, ModelsDirectoryName)
+            directories += mediaDir
+        }
+        directories += File("/data/local/tmp")
+        return directories.distinctBy { it.absolutePath }
+    }
+
+    private fun externalMediaDirectories(): List<File> =
+        runCatching { appContext.externalMediaDirs.toList() }.getOrDefault(emptyList())
 
     private fun List<File>.firstExistingNamedModel(): File? {
         for (directory in this) {
-            val files = directory.listFiles() ?: continue
+            val files = directory.safeListFiles()
             for (file in files) {
-                if (!file.isFile) continue
+                if (!file.existsAsFile()) continue
                 if (PreferredModelFilenames.any { it.equals(file.name, ignoreCase = true) }) {
                     return file
                 }
@@ -141,13 +176,18 @@ class LocalLlmBrain internal constructor(
     private fun List<File>.firstExistingLiteRtLmModel(): File? =
         asSequence()
             .flatMap { directory ->
-                directory.listFiles()
-                    ?.asSequence()
-                    ?.filter { it.isFile && it.extension.equals("litertlm", ignoreCase = true) }
-                    ?.sortedBy { it.name }
-                    ?: emptySequence()
+                directory.safeListFiles()
+                    .asSequence()
+                    .filter { it.existsAsFile() && it.extension.equals("litertlm", ignoreCase = true) }
+                    .sortedBy { it.name }
             }
             .firstOrNull()
+
+    private fun File.existsAsFile(): Boolean =
+        runCatching { isFile }.getOrDefault(false)
+
+    private fun File.safeListFiles(): Array<File> =
+        runCatching { listFiles() }.getOrNull() ?: emptyArray()
 
     private fun liteRtLmCacheDirectory(): File =
         File(appContext.cacheDir, "litertlm").also { it.mkdirs() }
@@ -183,8 +223,13 @@ class LocalLlmBrain internal constructor(
     private companion object {
         const val Tag = "LocalLlmBrain"
         const val SystemInstruction = "You extract safe draft banking intents for TrustiPay. Never execute a banking action."
+        const val ModelsDirectoryName = "models"
+        const val RequestedModelFilename = "gemma-4-E2B-it.litertlm"
+        const val RequestedModelRelativePath = "Android/media/com.trustipay/models/gemma-4-E2B-it.litertlm"
+        const val RequestedModelDisplayPath = "Internal storage/Android/media/com.trustipay/models/gemma-4-E2B-it.litertlm"
 
         val PreferredModelFilenames = listOf(
+            RequestedModelFilename,
             "model.litertlm",
             "Gemma-4-E2B-it.bin",
             "gemma-4-e2b-it.bin",

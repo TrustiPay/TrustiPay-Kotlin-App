@@ -2,6 +2,7 @@ package app.trustipay.voice
 
 import android.app.Application
 import app.trustipay.BuildConfig
+import java.math.BigDecimal
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -224,6 +225,7 @@ class VoiceAssistantViewModel(
                 },
                 errorMessage = null,
                 liveTranscriptionLabel = onDevicePipelineLabel(),
+                pendingBankingIntent = null,
             )
         }
 
@@ -291,6 +293,12 @@ class VoiceAssistantViewModel(
                     llmAnalysisState = llmBrain.analysisState(),
                 )
             }
+        }
+    }
+
+    fun consumePendingBankingIntent() {
+        updateState {
+            it.copy(pendingBankingIntent = null)
         }
     }
 
@@ -462,22 +470,24 @@ class VoiceAssistantViewModel(
                 
                 val llmResult = llmBrain.processRequest(cleanText)
                 val finalDisplay = llmResult.toVoiceAssistantDisplay()
+                val sendMoneyIntent = (llmResult as? LlmAnalysisResult.Success)
+                    ?.intent
+                    ?.takeIf { it.request == BankingIntentType.SendMoney }
 
                 updateState {
                     it.copy(
                         captureState = VoiceCaptureState.Idle,
                         transcript = finalDisplay,
                         languageLabel = detectLanguageLabel(cleanText),
-                        statusMessage = if (reachedMaxDuration) {
-                            "Captured locally. Recording stopped at the 30 second limit."
-                        } else if (resultText == null) {
-                            "Captured locally (via live fallback)."
-                        } else {
-                            "Captured locally."
-                        },
+                        statusMessage = captureCompleteMessage(
+                            reachedMaxDuration = reachedMaxDuration,
+                            usedLiveFallback = resultText == null,
+                            filledPaymentDraft = sendMoneyIntent != null,
+                        ),
                         errorMessage = null,
                         liveTranscriptionLabel = onDevicePipelineLabel(),
                         llmAnalysisState = llmBrain.analysisState(),
+                        pendingBankingIntent = sendMoneyIntent,
                     )
                 }
             } else {
@@ -617,12 +627,45 @@ private fun detectLanguageLabel(text: String): String {
     }
 }
 
+private fun captureCompleteMessage(
+    reachedMaxDuration: Boolean,
+    usedLiveFallback: Boolean,
+    filledPaymentDraft: Boolean,
+): String =
+    when {
+        filledPaymentDraft -> "Payment form filled from your voice request. Review before continuing."
+        reachedMaxDuration -> "Captured locally. Recording stopped at the 30 second limit."
+        usedLiveFallback -> "Captured locally (via live fallback)."
+        else -> "Captured locally."
+    }
+
 private fun LlmAnalysisResult.toVoiceAssistantDisplay(): String =
     when (this) {
-        is LlmAnalysisResult.Success -> toJsonString()
+        is LlmAnalysisResult.Success -> intent.toVoiceAssistantDisplay()
         is LlmAnalysisResult.Unavailable,
         is LlmAnalysisResult.Failure -> "Analysis paused: ${toJsonString()}\n\nRaw transcript: $rawTranscript"
     }
+
+private fun BankingIntent.toVoiceAssistantDisplay(): String =
+    when (request) {
+        BankingIntentType.SendMoney -> buildList {
+            add("Send money draft")
+            to?.takeIf { it.isNotBlank() }?.let { add("To: $it") }
+            amount?.let { add("Amount: Rs. ${it.toAmountText()}") }
+            reason?.takeIf { it.isNotBlank() }?.let { add("Note: $it") }
+        }.joinToString("\n")
+        BankingIntentType.PayBill -> buildList {
+            add("Bill payment draft")
+            to?.takeIf { it.isNotBlank() }?.let { add("Biller: $it") }
+            amount?.let { add("Amount: Rs. ${it.toAmountText()}") }
+            reason?.takeIf { it.isNotBlank() }?.let { add("Note: $it") }
+        }.joinToString("\n")
+        BankingIntentType.CheckBalance -> "Balance check request"
+        BankingIntentType.Unknown -> reason?.takeIf { it.isNotBlank() } ?: "Unknown voice request"
+    }
+
+private fun Double.toAmountText(): String =
+    BigDecimal.valueOf(this).stripTrailingZeros().toPlainString()
 
 private fun Throwable.toFriendlyMessage(fallback: String): String {
     val message = message.orEmpty()
