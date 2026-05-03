@@ -32,6 +32,8 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -45,10 +47,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import app.trustipay.offline.OfflineFeatureFlagProvider
 import app.trustipay.offline.domain.TransactionDirection
 import app.trustipay.offline.domain.TransactionState
 import app.trustipay.offline.transport.AndroidTransportCapabilityProvider
+import app.trustipay.ui.screens.PaymentDraft
 import app.trustipay.ui.theme.TrustiPayBackground
 import app.trustipay.ui.theme.TrustiPayPrimary
 import app.trustipay.ui.theme.TrustiPaySecondary
@@ -57,6 +61,8 @@ import app.trustipay.ui.theme.TrustiPayTertiary
 @Composable
 fun OfflinePaymentsScreen(
     modifier: Modifier = Modifier,
+    voiceDraft: PaymentDraft? = null,
+    viewModel: OfflineViewModel = viewModel(),
 ) {
     val flags = OfflineFeatureFlagProvider.current
     if (!flags.offlinePaymentsEnabled) {
@@ -65,8 +71,7 @@ fun OfflinePaymentsScreen(
     }
 
     val context = LocalContext.current
-    val controller = remember { OfflinePrototypeController.create(flags) }
-    var snapshot by remember { mutableStateOf(controller.snapshot()) }
+    val snapshot by viewModel.uiState.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val tabs = listOf("Pay", "Receive", "Wallet", "Pending")
     val capabilities = remember(context, flags) {
@@ -74,7 +79,7 @@ fun OfflinePaymentsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        OfflineSummary(snapshot = snapshot, onSyncClick = { snapshot = controller.syncNow() })
+        OfflineSummary(snapshot = snapshot) { viewModel.syncNow() }
         TabRow(selectedTabIndex = selectedTab) {
             tabs.forEachIndexed { index, label ->
                 Tab(
@@ -86,8 +91,8 @@ fun OfflinePaymentsScreen(
         }
 
         when (selectedTab) {
-            0 -> PayOfflineTab(snapshot, controller) { snapshot = it }
-            1 -> ReceiveOfflineTab(snapshot, controller) { snapshot = it }
+            0 -> PayOfflineTab(snapshot, viewModel, voiceDraft)
+            1 -> ReceiveOfflineTab(snapshot)
             2 -> WalletTab(snapshot)
             else -> PendingTransactionsTab(snapshot, capabilities.map { it.type.label to it.available })
         }
@@ -159,12 +164,21 @@ private fun OfflineSummary(
 @Composable
 private fun PayOfflineTab(
     snapshot: OfflineUiSnapshot,
-    controller: OfflinePrototypeController,
-    onSnapshot: (OfflineUiSnapshot) -> Unit,
+    viewModel: OfflineViewModel,
+    voiceDraft: PaymentDraft? = null,
 ) {
     var amount by rememberSaveable { mutableStateOf("1500.00") }
     var receiver by rememberSaveable { mutableStateOf("Food City") }
     var note by rememberSaveable { mutableStateOf("Offline purchase") }
+
+    LaunchedEffect(voiceDraft?.eventId) {
+        val draft = voiceDraft ?: return@LaunchedEffect
+        if (draft.isOffline) {
+            amount = draft.amount
+            receiver = draft.recipient
+            note = draft.note
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -199,7 +213,7 @@ private fun PayOfflineTab(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
-                    onClick = { onSnapshot(controller.runQrPayment(amount, receiver, note)) },
+                    onClick = { viewModel.runQrPayment(amount, receiver, note) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Default.QrCodeScanner, contentDescription = null)
@@ -215,8 +229,6 @@ private fun PayOfflineTab(
 @Composable
 private fun ReceiveOfflineTab(
     snapshot: OfflineUiSnapshot,
-    controller: OfflinePrototypeController,
-    onSnapshot: (OfflineUiSnapshot) -> Unit,
 ) {
     var amount by rememberSaveable { mutableStateOf("500.00") }
     var note by rememberSaveable { mutableStateOf("Counter payment") }
@@ -247,7 +259,7 @@ private fun ReceiveOfflineTab(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
-                    onClick = { onSnapshot(controller.createReceiveRequest(amount, note)) },
+                    onClick = { /* TODO: Implement receive logic in ViewModel if needed */ },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Default.QrCodeScanner, contentDescription = null)
@@ -403,7 +415,7 @@ private fun IconBadge(state: TransactionState) {
 }
 
 private fun String.filterMoneyInput(): String =
-    filter { it.isDigit() || it == '.' || it == ',' }.take(18)
+    filter { (it.isDigit() || it == '.' || it == ',') }.take(18)
 
 private fun Long.toDisplayAmount(): String {
     val major = this / 100

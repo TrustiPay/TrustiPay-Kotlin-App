@@ -99,7 +99,7 @@ fun VoiceAssistantScreen(
 
     LaunchedEffect(uiState.pendingBankingIntent) {
         val bankingIntent = uiState.pendingBankingIntent ?: return@LaunchedEffect
-        val paymentDraft = bankingIntent.toPaymentDraftOrNull()
+        val paymentDraft = bankingIntent.toPaymentDraftOrNull(uiState.isOfflineSuggested)
         viewModel.consumePendingBankingIntent()
         paymentDraft?.let(onPaymentDraft)
     }
@@ -451,7 +451,7 @@ private fun screenTitle(uiState: VoiceAssistantUiState): String =
 
 private fun Modifier.scale(scale: Float) = this.graphicsLayer(scaleX = scale, scaleY = scale)
 
-private fun BankingIntent.toPaymentDraftOrNull(): PaymentDraft? {
+private fun BankingIntent.toPaymentDraftOrNull(isOffline: Boolean = false): PaymentDraft? {
     if (request != BankingIntentType.SendMoney) return null
 
     val recipient = to.orEmpty().trim()
@@ -463,6 +463,7 @@ private fun BankingIntent.toPaymentDraftOrNull(): PaymentDraft? {
         amount = amountInput,
         note = reason.orEmpty().trim(),
         rawTranscript = rawTranscript,
+        isOffline = isOffline,
     )
 }
 

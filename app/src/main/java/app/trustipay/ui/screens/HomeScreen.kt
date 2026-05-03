@@ -40,6 +40,7 @@ data class PaymentDraft(
     val note: String = "",
     val rawTranscript: String = "",
     val eventId: Int = 0,
+    val isOffline: Boolean = false,
 )
 
 @Composable

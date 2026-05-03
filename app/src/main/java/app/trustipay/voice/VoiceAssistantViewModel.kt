@@ -2,6 +2,7 @@ package app.trustipay.voice
 
 import android.app.Application
 import app.trustipay.BuildConfig
+import app.trustipay.offline.OfflineFeatureFlagProvider
 import java.math.BigDecimal
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -120,8 +121,9 @@ class VoiceAssistantViewModel(
                         llmAnalysisState = analysisState,
                     )
                 }
+            } catch (throwable: CancellationException) {
+                throw throwable
             } catch (throwable: Throwable) {
-                if (throwable is CancellationException) throw throwable
                 updateModelFailure(throwable, "Voice model download failed.")
             }
         }
@@ -252,10 +254,11 @@ class VoiceAssistantViewModel(
 
                 sessionId += 1
                 finalizeTranscription(sessionId, recording.audio, recording.reachedMaxDuration)
+            } catch (throwable: CancellationException) {
+                throw throwable
             } catch (throwable: Throwable) {
                 liveTranscriptionJob?.cancel()
                 liveTranscriptionJob = null
-                if (throwable is CancellationException) throw throwable
                 if (activeSession == sessionId) {
                     updateState {
                         it.copy(
@@ -280,9 +283,9 @@ class VoiceAssistantViewModel(
         liveTranscriptionJob?.cancel()
         recordingJob = null
         liveTranscriptionJob = null
-        if (_uiState.value.captureState == VoiceCaptureState.Listening ||
+        if ((_uiState.value.captureState == VoiceCaptureState.Listening ||
             _uiState.value.captureState == VoiceCaptureState.LiveTranscribing ||
-            _uiState.value.captureState == VoiceCaptureState.Finalizing
+            _uiState.value.captureState == VoiceCaptureState.Finalizing)
         ) {
             updateState {
                 it.copy(
@@ -334,8 +337,9 @@ class VoiceAssistantViewModel(
                     )
                 }
                 initializeVoskLiveTranscriber()
+            } catch (throwable: CancellationException) {
+                throw throwable
             } catch (throwable: Throwable) {
-                if (throwable is CancellationException) throw throwable
                 updateModelFailure(throwable, "Voice model initialization failed.")
             }
         }
@@ -394,8 +398,9 @@ class VoiceAssistantViewModel(
                         errorMessage = null,
                     )
                 }
+            } catch (throwable: CancellationException) {
+                throw throwable
             } catch (throwable: Throwable) {
-                if (throwable is CancellationException) throw throwable
                 updateStateIfActive(activeSession) {
                     it.copy(
                         captureState = VoiceCaptureState.Listening,
@@ -442,8 +447,9 @@ class VoiceAssistantViewModel(
                 transcriber.transcribe(audio) { partialText ->
                     updateTranscriptIfActive(activeSession, partialText)
                 }
+            } catch (throwable: CancellationException) {
+                throw throwable
             } catch (throwable: Throwable) {
-                if (throwable is CancellationException) throw throwable
                 // LOG the failure but don't crash yet, we might have a Vosk fallback
                 android.util.Log.e("VoiceAssistantVM", "Whisper finalization failed: ${throwable.message}")
                 null
@@ -474,6 +480,9 @@ class VoiceAssistantViewModel(
                     ?.intent
                     ?.takeIf { it.request == BankingIntentType.SendMoney }
 
+                val isOffline = !NetworkUtils.isOnline(getApplication())
+                val offlinePaymentsEnabled = OfflineFeatureFlagProvider.current.offlinePaymentsEnabled
+
                 updateState {
                     it.copy(
                         captureState = VoiceCaptureState.Idle,
@@ -483,11 +492,13 @@ class VoiceAssistantViewModel(
                             reachedMaxDuration = reachedMaxDuration,
                             usedLiveFallback = resultText == null,
                             filledPaymentDraft = sendMoneyIntent != null,
+                            isOffline = isOffline && offlinePaymentsEnabled
                         ),
                         errorMessage = null,
                         liveTranscriptionLabel = onDevicePipelineLabel(),
                         llmAnalysisState = llmBrain.analysisState(),
                         pendingBankingIntent = sendMoneyIntent,
+                        isOfflineSuggested = isOffline && offlinePaymentsEnabled && sendMoneyIntent != null,
                     )
                 }
             } else {
@@ -503,8 +514,9 @@ class VoiceAssistantViewModel(
                     )
                 }
             }
+        } catch (throwable: CancellationException) {
+            throw throwable
         } catch (throwable: Throwable) {
-            if (throwable is CancellationException) throw throwable
             updateStateIfActive(activeSession) {
                 it.copy(
                     captureState = VoiceCaptureState.Error,
@@ -631,8 +643,10 @@ private fun captureCompleteMessage(
     reachedMaxDuration: Boolean,
     usedLiveFallback: Boolean,
     filledPaymentDraft: Boolean,
+    isOffline: Boolean = false,
 ): String =
     when {
+        isOffline && filledPaymentDraft -> "Offline? Initiating offline payment draft. Review below."
         filledPaymentDraft -> "Payment form filled from your voice request. Review before continuing."
         reachedMaxDuration -> "Captured locally. Recording stopped at the 30 second limit."
         usedLiveFallback -> "Captured locally (via live fallback)."

@@ -85,7 +85,10 @@ fun TrustiPayApp() {
                         voiceDraft = latestVoiceDraft,
                         onVoiceClick = { showVoiceAssistant = true }
                     )
-                    AppDestinations.OFFLINE -> OfflinePaymentsScreen(Modifier.padding(innerPadding))
+                    AppDestinations.OFFLINE -> OfflinePaymentsScreen(
+                        modifier = Modifier.padding(innerPadding),
+                        voiceDraft = latestVoiceDraft
+                    )
                     AppDestinations.HISTORY -> PlaceholderScreen("Transaction History", Modifier.padding(innerPadding))
                     AppDestinations.PROFILE -> PlaceholderScreen("User Profile", Modifier.padding(innerPadding))
                 }
@@ -98,7 +101,11 @@ fun TrustiPayApp() {
                 onPaymentDraft = { draft ->
                     voiceDraftEventId += 1
                     latestVoiceDraft = draft.copy(eventId = voiceDraftEventId)
-                    currentDestination = AppDestinations.HOME
+                    if (draft.isOffline) {
+                        currentDestination = AppDestinations.OFFLINE
+                    } else {
+                        currentDestination = AppDestinations.HOME
+                    }
                     showVoiceAssistant = false
                 }
             )
