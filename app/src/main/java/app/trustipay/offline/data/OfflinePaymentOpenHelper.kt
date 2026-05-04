@@ -18,5 +18,10 @@ class OfflinePaymentOpenHelper(context: Context) : SQLiteOpenHelper(
         if (oldVersion < 1) {
             OfflinePaymentSchema.CreateStatements.forEach(db::execSQL)
         }
+        if (oldVersion < 2) {
+            OfflinePaymentSchema.MigrationStatementsV2.forEach { statement ->
+                runCatching { db.execSQL(statement) }
+            }
+        }
     }
 }

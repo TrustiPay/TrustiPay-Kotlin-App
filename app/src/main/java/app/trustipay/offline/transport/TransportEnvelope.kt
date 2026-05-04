@@ -11,6 +11,7 @@ data class TransportEnvelope(
     val chunkCount: Int,
     val payloadEncoding: String,
     val payloadHash: String,
+    val previousHash: String? = null,
     val payloadChunk: String,
     val sentAtDevice: Instant,
 )

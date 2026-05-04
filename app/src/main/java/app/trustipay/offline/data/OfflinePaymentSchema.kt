@@ -2,7 +2,7 @@ package app.trustipay.offline.data
 
 object OfflinePaymentSchema {
     const val DatabaseName = "trustipay_offline_payments.db"
-    const val Version = 1
+    const val Version = 2
 
     val CreateStatements = listOf(
         """
@@ -40,6 +40,10 @@ object OfflinePaymentSchema {
           request_hash TEXT,
           offer_hash TEXT,
           receipt_hash TEXT,
+          sender_previous_hash TEXT,
+          sender_chain_hash TEXT,
+          receiver_previous_hash TEXT,
+          receiver_chain_hash TEXT,
           created_local_at TEXT NOT NULL,
           updated_local_at TEXT NOT NULL,
           last_sync_attempt_at TEXT,
@@ -78,5 +82,34 @@ object OfflinePaymentSchema {
           updated_local_at TEXT NOT NULL
         )
         """.trimIndent(),
+        """
+        CREATE TABLE IF NOT EXISTS local_hash_chain_entries (
+          entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_id TEXT NOT NULL,
+          transaction_id TEXT NOT NULL,
+          previous_hash TEXT NOT NULL,
+          chain_hash TEXT NOT NULL UNIQUE,
+          created_local_at TEXT NOT NULL
+        )
+        """.trimIndent(),
+        "CREATE INDEX IF NOT EXISTS idx_local_hash_chain_device ON local_hash_chain_entries(device_id, entry_id)",
+    )
+
+    val MigrationStatementsV2 = listOf(
+        "ALTER TABLE offline_transactions ADD COLUMN sender_previous_hash TEXT",
+        "ALTER TABLE offline_transactions ADD COLUMN sender_chain_hash TEXT",
+        "ALTER TABLE offline_transactions ADD COLUMN receiver_previous_hash TEXT",
+        "ALTER TABLE offline_transactions ADD COLUMN receiver_chain_hash TEXT",
+        """
+        CREATE TABLE IF NOT EXISTS local_hash_chain_entries (
+          entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          device_id TEXT NOT NULL,
+          transaction_id TEXT NOT NULL,
+          previous_hash TEXT NOT NULL,
+          chain_hash TEXT NOT NULL UNIQUE,
+          created_local_at TEXT NOT NULL
+        )
+        """.trimIndent(),
+        "CREATE INDEX IF NOT EXISTS idx_local_hash_chain_device ON local_hash_chain_entries(device_id, entry_id)",
     )
 }

@@ -70,6 +70,7 @@ class TrustiPayHceService : HostApduService() {
             chunkCount = j.getInt("cc"),
             payloadEncoding = j.getString("enc"),
             payloadHash = j.getString("hash"),
+            previousHash = j.optString("prev").takeIf { it.isNotBlank() },
             payloadChunk = j.getString("payload"),
             sentAtDevice = Instant.parse(j.getString("sent")),
         )

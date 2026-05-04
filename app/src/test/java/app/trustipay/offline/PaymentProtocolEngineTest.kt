@@ -5,6 +5,7 @@ import app.trustipay.offline.domain.SecureOfflineIdGenerator
 import app.trustipay.offline.domain.TransactionState
 import app.trustipay.offline.domain.TransportType
 import app.trustipay.offline.protocol.JavaSigningKeyFactory
+import app.trustipay.offline.protocol.LocalHashChain
 import app.trustipay.offline.protocol.OfflineTokenFactory
 import app.trustipay.offline.protocol.PaymentProtocolEngine
 import app.trustipay.offline.protocol.PublicKeySignatureVerifier
@@ -68,11 +69,34 @@ class PaymentProtocolEngineTest {
             senderPublicKeyId = sender.publicKeyId,
             selectedTokens = tokens,
             signer = sender.signer(),
+            senderPreviousHash = "prev_sender_hash",
         )
+        assertEquals("prev_sender_hash", offer.senderPreviousHash)
         assertTrue(engine.validatePaymentOffer(offer, request, verifier, tokenValidator, emptySet()).accepted)
 
-        val receipt = engine.createPaymentReceipt(request, offer, "receiver-device", receiver.signer())
+        val receipt = engine.createPaymentReceipt(
+            request = request,
+            offer = offer,
+            receiverDeviceId = "receiver-device",
+            signer = receiver.signer(),
+            receiverPreviousHash = "prev_receiver_hash",
+        )
+        assertEquals("prev_receiver_hash", receipt.receiverPreviousHash)
         assertTrue(engine.validatePaymentReceipt(receipt, request, offer, verifier).accepted)
+
+        val chainHash = LocalHashChain.transactionHash(
+            deviceId = "sender-device",
+            previousHash = offer.senderPreviousHash,
+            transactionId = offer.transactionId,
+            requestHash = offer.requestHash,
+            offerHash = receipt.offerHash,
+            receiptHash = "receipt_hash",
+            amountMinor = offer.amountMinor,
+            currency = offer.currency,
+            transportType = TransportType.QR,
+            createdAtDevice = clock.instant(),
+        )
+        assertTrue(chainHash.isNotBlank())
     }
 
     @Test

@@ -17,6 +17,7 @@ import app.trustipay.offline.domain.TransactionState
 import app.trustipay.offline.domain.TransportType
 import app.trustipay.offline.protocol.CacheBackedSignatureVerifier
 import app.trustipay.offline.protocol.JavaSigningKeyFactory
+import app.trustipay.offline.protocol.LocalHashChain
 import app.trustipay.offline.protocol.MessageHasher
 import app.trustipay.offline.protocol.OfflineTokenFactory
 import app.trustipay.offline.protocol.OfflineTokenWallet
@@ -27,6 +28,7 @@ import app.trustipay.offline.protocol.TokenValidator
 import app.trustipay.offline.protocol.canonicalBytes
 import app.trustipay.offline.security.AndroidKeystoreSigner
 import app.trustipay.offline.security.DeviceKeyManager
+import app.trustipay.offline.security.LocalEncryptionService
 import app.trustipay.offline.security.PublicKeyCache
 import app.trustipay.offline.sync.SyncRepository
 import kotlinx.coroutines.Dispatchers
@@ -45,7 +47,13 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
     private val store = SQLiteOfflinePaymentStore(dbHelper.writableDatabase)
     private val clock = Clock.systemUTC()
     private val idGenerator = SecureOfflineIdGenerator()
-    private val syncRepository = SyncRepository(store, flags, idGenerator, clock)
+    private val syncRepository = SyncRepository(
+        store = store,
+        flags = flags,
+        idGenerator = idGenerator,
+        clock = clock,
+        localEncryptionService = LocalEncryptionService(),
+    )
     private val engine = PaymentProtocolEngine(clock, idGenerator)
 
     // Real device key (hardware-backed on API 29+)
@@ -200,13 +208,16 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
                     validFor = Duration.ofMinutes(5),
                 )
 
+                val senderDeviceId = deviceKeyManager.getPublicKeyId()
+                val senderPreviousHash = store.latestLocalChainHash(senderDeviceId) ?: LocalHashChain.GENESIS_HASH
                 val offer = engine.createPaymentOffer(
                     request = request,
                     senderUserAlias = "Me",
-                    senderDeviceId = deviceKeyManager.getPublicKeyId(),
-                    senderPublicKeyId = deviceKeyManager.getPublicKeyId(),
+                    senderDeviceId = senderDeviceId,
+                    senderPublicKeyId = senderDeviceId,
                     selectedTokens = selected.tokens,
                     signer = keystoreSigner,
+                    senderPreviousHash = senderPreviousHash,
                 )
 
                 val receipt = engine.createPaymentReceipt(
@@ -214,6 +225,7 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
                     offer = offer,
                     receiverDeviceId = demoReceiver.publicKeyId,
                     signer = demoReceiver.signer(),
+                    receiverPreviousHash = LocalHashChain.GENESIS_HASH,
                 )
 
                 wallet.markSpentPendingSync(selected.tokens.map { it.tokenId })
@@ -249,6 +261,8 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
                     requestHash = MessageHasher.sha256Base64Url(requestPayload),
                     offerHash = MessageHasher.sha256Base64Url(offerPayload),
                     receiptHash = MessageHasher.sha256Base64Url(receiptPayload),
+                    senderPreviousHash = senderPreviousHash,
+                    receiverPreviousHash = receipt.receiverPreviousHash,
                     createdLocalAt = now,
                     updatedLocalAt = now,
                 )

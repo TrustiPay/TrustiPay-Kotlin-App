@@ -135,6 +135,7 @@ class WifiDirectPaymentTransport(
             put("cc", envelope.chunkCount)
             put("enc", envelope.payloadEncoding)
             put("hash", envelope.payloadHash)
+            envelope.previousHash?.let { put("prev", it) }
             put("payload", envelope.payloadChunk)
             put("sent", envelope.sentAtDevice.toString())
         }.toString()
@@ -150,6 +151,7 @@ class WifiDirectPaymentTransport(
             chunkCount = j.getInt("cc"),
             payloadEncoding = j.getString("enc"),
             payloadHash = j.getString("hash"),
+            previousHash = j.optString("prev").takeIf { it.isNotBlank() },
             payloadChunk = j.getString("payload"),
             sentAtDevice = Instant.parse(j.getString("sent")),
         )

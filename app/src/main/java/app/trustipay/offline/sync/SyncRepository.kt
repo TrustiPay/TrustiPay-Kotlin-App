@@ -2,18 +2,24 @@ package app.trustipay.offline.sync
 
 import app.trustipay.api.ApiResult
 import app.trustipay.api.TrustiPayApiService
+import app.trustipay.api.dto.OfflinePendingTransactionDto
 import app.trustipay.api.dto.OfflineSyncRequest
 import app.trustipay.api.safeApiCall
 import app.trustipay.offline.OfflineFeatureFlags
 import app.trustipay.offline.data.OfflinePaymentStore
+import app.trustipay.offline.domain.LocalHashChainEntry
 import app.trustipay.offline.domain.OfflineIdGenerator
 import app.trustipay.offline.domain.OfflineTransaction
 import app.trustipay.offline.domain.SecureOfflineIdGenerator
 import app.trustipay.offline.domain.SyncOperationType
 import app.trustipay.offline.domain.SyncQueueItem
 import app.trustipay.offline.domain.SyncQueueStatus
+import app.trustipay.offline.domain.TransactionDirection
 import app.trustipay.offline.domain.TransactionState
+import app.trustipay.offline.protocol.LocalHashChain
 import app.trustipay.offline.security.DeviceKeyManager
+import app.trustipay.offline.security.LocalEncryptionService
+import org.json.JSONObject
 import java.time.Clock
 import java.util.Base64
 import java.util.UUID
@@ -27,16 +33,19 @@ class SyncRepository(
     private val clock: Clock = Clock.systemUTC(),
     private val apiService: TrustiPayApiService? = null,
     private val deviceKeyManager: DeviceKeyManager? = null,
+    private val localEncryptionService: LocalEncryptionService? = null,
 ) {
     fun queueAcceptedTransaction(transaction: OfflineTransaction) {
         val now = clock.instant()
-        store.upsertTransaction(transaction.copy(state = TransactionState.SYNC_QUEUED, updatedLocalAt = now))
+        val chainedTransaction = ensureHashChain(transaction, now)
+        val queuePayload = chainedTransaction.receiptPayload ?: chainedTransaction.offerPayload ?: byteArrayOf()
+        store.upsertTransaction(chainedTransaction.copy(state = TransactionState.SYNC_QUEUED, updatedLocalAt = now))
         store.enqueue(
             SyncQueueItem(
                 queueId = idGenerator.newId("queue"),
-                transactionId = transaction.transactionId,
+                transactionId = chainedTransaction.transactionId,
                 operationType = SyncOperationType.UPLOAD_OFFLINE_TRANSACTION,
-                payload = transaction.receiptPayload ?: transaction.offerPayload ?: byteArrayOf(),
+                payload = encryptedQueuePayload(chainedTransaction, queuePayload),
                 attemptCount = 0,
                 nextAttemptAt = null,
                 status = SyncQueueStatus.PENDING,
@@ -119,24 +128,115 @@ class SyncRepository(
         val offerPayload = txn.offerPayload ?: return false
         val receiptPayload = txn.receiptPayload ?: return false
 
-        val devicePublicKeyId = keyManager.getPublicKeyId()
-        val deviceSignature = keyManager.signAsBase64Url(receiptPayload)
+        val deviceId = keyManager.getPublicKeyId()
         val idempotencyKey = UUID.nameUUIDFromBytes(txn.transactionId.toByteArray()).toString()
+        val offerJson = JSONObject(String(offerPayload, Charsets.UTF_8))
+        val receiptJson = JSONObject(String(receiptPayload, Charsets.UTF_8))
+        val spentTokenIds = spentTokenIdsFromOffer(offerJson)
 
         val result = safeApiCall {
             api.submitOfflineTransaction(
                 request = OfflineSyncRequest(
-                    transactionId = txn.transactionId,
-                    requestPayloadBase64 = Base64.getUrlEncoder().withoutPadding().encodeToString(requestPayload),
-                    offerPayloadBase64 = Base64.getUrlEncoder().withoutPadding().encodeToString(offerPayload),
-                    receiptPayloadBase64 = Base64.getUrlEncoder().withoutPadding().encodeToString(receiptPayload),
-                    devicePublicKeyId = devicePublicKeyId,
-                    deviceSignature = deviceSignature,
+                    deviceId = deviceId,
+                    pendingTransactions = listOf(
+                        OfflinePendingTransactionDto(
+                            transactionId = txn.transactionId,
+                            paymentRequest = Base64.getUrlEncoder().withoutPadding().encodeToString(requestPayload),
+                            paymentOffer = Base64.getUrlEncoder().withoutPadding().encodeToString(offerPayload),
+                            paymentReceipt = Base64.getUrlEncoder().withoutPadding().encodeToString(receiptPayload),
+                            spentTokenIds = spentTokenIds,
+                            senderDeviceId = offerJson.optString("senderDeviceId").takeIf { it.isNotBlank() },
+                            receiverDeviceId = receiptJson.optString("receiverDeviceId").takeIf { it.isNotBlank() },
+                            amountMinor = txn.amountMinor,
+                            currency = txn.currency,
+                            transportType = txn.transportType?.name ?: "UNKNOWN",
+                            createdAtDevice = txn.createdLocalAt.toString(),
+                            senderPreviousHash = txn.senderPreviousHash,
+                            senderChainHash = txn.senderChainHash,
+                            receiverPreviousHash = txn.receiverPreviousHash,
+                            receiverChainHash = txn.receiverChainHash,
+                        )
+                    ),
+                    spentTokenIds = spentTokenIds,
                 ),
                 idempotencyKey = idempotencyKey,
             )
         }
         return result is ApiResult.Success
+    }
+
+    private fun ensureHashChain(transaction: OfflineTransaction, now: java.time.Instant): OfflineTransaction {
+        val requestHash = transaction.requestHash
+        val offerHash = transaction.offerHash
+        val receiptHash = transaction.receiptHash
+        return when (transaction.direction) {
+            TransactionDirection.SENT -> {
+                val offerJson = transaction.offerPayload?.let { JSONObject(String(it, Charsets.UTF_8)) }
+                val deviceId = offerJson?.optString("senderDeviceId").orEmpty()
+                if (deviceId.isBlank() || transaction.senderChainHash != null) return transaction
+                val previousHash = transaction.senderPreviousHash
+                    ?: offerJson?.optString("senderPreviousHash")?.takeIf { it.isNotBlank() }
+                    ?: store.latestLocalChainHash(deviceId)
+                    ?: LocalHashChain.GENESIS_HASH
+                val chainHash = LocalHashChain.transactionHash(
+                    deviceId = deviceId,
+                    previousHash = previousHash,
+                    transactionId = transaction.transactionId,
+                    requestHash = requestHash,
+                    offerHash = offerHash,
+                    receiptHash = receiptHash,
+                    amountMinor = transaction.amountMinor,
+                    currency = transaction.currency,
+                    transportType = transaction.transportType,
+                    createdAtDevice = transaction.createdLocalAt,
+                )
+                store.appendLocalChainEntry(LocalHashChainEntry(deviceId, transaction.transactionId, previousHash, chainHash, now))
+                transaction.copy(senderPreviousHash = previousHash, senderChainHash = chainHash)
+            }
+            TransactionDirection.RECEIVED -> {
+                val receiptJson = transaction.receiptPayload?.let { JSONObject(String(it, Charsets.UTF_8)) }
+                val deviceId = receiptJson?.optString("receiverDeviceId").orEmpty()
+                if (deviceId.isBlank() || transaction.receiverChainHash != null) return transaction
+                val previousHash = transaction.receiverPreviousHash
+                    ?: receiptJson?.optString("receiverPreviousHash")?.takeIf { it.isNotBlank() }
+                    ?: store.latestLocalChainHash(deviceId)
+                    ?: LocalHashChain.GENESIS_HASH
+                val chainHash = LocalHashChain.transactionHash(
+                    deviceId = deviceId,
+                    previousHash = previousHash,
+                    transactionId = transaction.transactionId,
+                    requestHash = requestHash,
+                    offerHash = offerHash,
+                    receiptHash = receiptHash,
+                    amountMinor = transaction.amountMinor,
+                    currency = transaction.currency,
+                    transportType = transaction.transportType,
+                    createdAtDevice = transaction.createdLocalAt,
+                )
+                store.appendLocalChainEntry(LocalHashChainEntry(deviceId, transaction.transactionId, previousHash, chainHash, now))
+                transaction.copy(receiverPreviousHash = previousHash, receiverChainHash = chainHash)
+            }
+        }
+    }
+
+    private fun encryptedQueuePayload(transaction: OfflineTransaction, payload: ByteArray): ByteArray {
+        val encryption = localEncryptionService ?: return payload
+        val previousHash = transaction.senderPreviousHash
+            ?: transaction.receiverPreviousHash
+            ?: LocalHashChain.GENESIS_HASH
+        val aad = "sync_queue:${transaction.transactionId}".toByteArray(Charsets.UTF_8)
+        return with(encryption) {
+            encryptWithPreviousHash(payload, previousHash, aad).encodeForStorage()
+        }
+    }
+
+    private fun spentTokenIdsFromOffer(offerJson: JSONObject): List<String> {
+        val tokens = offerJson.optJSONArray("offlineTokens") ?: return emptyList()
+        return buildList {
+            for (index in 0 until tokens.length()) {
+                tokens.optJSONObject(index)?.optString("tokenId")?.takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }
     }
 }
 

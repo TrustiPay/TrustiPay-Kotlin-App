@@ -23,9 +23,10 @@ class SettlementStatusPoller(
         val result = safeApiCall { api.getSettlementStatus(transactionId) }
         if (result is ApiResult.Success) {
             val status = result.data
-            val settlementResult = when (status.serverStatus) {
-                "SETTLED" -> ServerSettlementResult.SETTLED
-                "REJECTED" -> when {
+            val serverStatus = status.serverStatus ?: status.status
+            val settlementResult = when {
+                serverStatus == "SETTLED" || serverStatus == "SHADOW_SETTLED" -> ServerSettlementResult.SETTLED
+                serverStatus?.startsWith("REJECTED") == true -> when {
                     status.rejectionReason?.contains("double", ignoreCase = true) == true -> ServerSettlementResult.DOUBLE_SPEND
                     status.rejectionReason?.contains("revoked", ignoreCase = true) == true -> ServerSettlementResult.REVOKED_TOKEN
                     status.rejectionReason?.contains("expired", ignoreCase = true) == true -> ServerSettlementResult.EXPIRED_TOKEN

@@ -11,4 +11,5 @@ data class NfcBootstrapPayload(
     val currency: String,
     val sessionId: String,
     val supportedTransports: List<TransportType>,
+    val previousHash: String? = null,
 )

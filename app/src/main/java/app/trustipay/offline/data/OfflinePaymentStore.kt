@@ -1,6 +1,7 @@
 package app.trustipay.offline.data
 
 import app.trustipay.offline.domain.KnownSpentToken
+import app.trustipay.offline.domain.LocalHashChainEntry
 import app.trustipay.offline.domain.OfflineToken
 import app.trustipay.offline.domain.OfflineTransaction
 import app.trustipay.offline.domain.SyncQueueItem
@@ -22,4 +23,7 @@ interface OfflinePaymentStore {
 
     fun recordKnownSpentToken(token: KnownSpentToken)
     fun knownSpentTokenIds(): Set<String>
+
+    fun latestLocalChainHash(deviceId: String): String?
+    fun appendLocalChainEntry(entry: LocalHashChainEntry)
 }

@@ -9,6 +9,7 @@ import app.trustipay.offline.data.OfflinePaymentOpenHelper
 import app.trustipay.offline.data.SQLiteOfflinePaymentStore
 import app.trustipay.offline.OfflineFeatureFlagProvider
 import app.trustipay.offline.domain.SecureOfflineIdGenerator
+import app.trustipay.offline.security.LocalEncryptionService
 import java.time.Clock
 
 class TrustiPayWorkerFactory : WorkerFactory() {
@@ -28,6 +29,7 @@ class TrustiPayWorkerFactory : WorkerFactory() {
                     clock = Clock.systemUTC(),
                     apiService = AppContainer.apiService,
                     deviceKeyManager = app.trustipay.offline.security.DeviceKeyManager(),
+                    localEncryptionService = LocalEncryptionService(),
                 )
                 val poller = SettlementStatusPoller(
                     store = store,

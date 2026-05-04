@@ -49,11 +49,17 @@ interface TrustiPayApiService {
         @Header("Idempotency-Key") idempotencyKey: String,
     ): PaymentResponse
 
-    @POST("devices/register")
-    suspend fun registerDevice(@Body request: DeviceRegistrationRequest): DeviceRegistrationResponse
+    @POST("offline/devices/register")
+    suspend fun registerDevice(
+        @Body request: DeviceRegistrationRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+    ): DeviceRegistrationResponse
 
-    @POST("offline/tokens/issue")
-    suspend fun requestOfflineTokens(@Body request: TokenIssuanceRequest): TokenIssuanceResponse
+    @POST("offline/tokens/request")
+    suspend fun requestOfflineTokens(
+        @Body request: TokenIssuanceRequest,
+        @Header("Idempotency-Key") idempotencyKey: String,
+    ): TokenIssuanceResponse
 
     @POST("offline/sync")
     suspend fun submitOfflineTransaction(
@@ -61,6 +67,6 @@ interface TrustiPayApiService {
         @Header("Idempotency-Key") idempotencyKey: String,
     ): OfflineSyncResponse
 
-    @GET("offline/sync/{transactionId}")
+    @GET("offline/sync/status/{transactionId}")
     suspend fun getSettlementStatus(@Path("transactionId") transactionId: String): SettlementStatusResponse
 }

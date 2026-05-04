@@ -55,6 +55,10 @@ class LocalWhisperTranscriber(
 
     suspend fun downloadVoskModel(language: AssistantLanguage) = withContext(Dispatchers.IO) {
         val url = language.voskModelUrl
+        if (url == null) {
+            Log.d("VoskDownloader", "Skipping Vosk model download for ${language.label} (URL is null)")
+            return@withContext
+        }
         val langFolder = language.name.lowercase()
         val modelsDir = File(modelStorageDirectory())
         if (!modelsDir.exists()) modelsDir.mkdirs()
@@ -77,26 +81,27 @@ class LocalWhisperTranscriber(
             Log.d("VoskDownloader", "Extracting Vosk model...")
             extractZipTo(tempZip, modelsDir)
             
-            // Find the extracted directory (it usually has a name like vosk-model-small-...)
-            val extractedDir = modelsDir.listFiles { f -> f.isDirectory && f.name.contains("vosk-model") && f.name != "vosk-model" && !f.name.startsWith("vosk-model-") }
-                ?.firstOrNull() ?: modelsDir.listFiles { f -> f.isDirectory && f.name.contains("vosk-model") && !f.name.endsWith("-si") && !f.name.endsWith("-en") && f.name != "vosk-model" }?.firstOrNull()
+            // Find the newly extracted directory
+            val extractedDir = modelsDir.listFiles { f -> 
+                f.isDirectory && f.name.contains("vosk-model") && 
+                f.name != "vosk-model" && 
+                !f.name.endsWith("-en") && 
+                !f.name.endsWith("-si") 
+            }?.maxByOrNull { it.lastModified() }
             
             if (extractedDir != null) {
                 val targetDir = File(modelsDir, "vosk-model-$langFolder")
                 if (targetDir.exists()) targetDir.deleteRecursively()
-                extractedDir.renameTo(targetDir)
-                Log.d("VoskDownloader", "Vosk model setup complete at ${targetDir.absolutePath}")
-            } else {
-                // If we can't find it by name, check if a new directory was created
-                val allDirs = modelsDir.listFiles { f -> f.isDirectory }
-                val possibleDir = allDirs?.maxByOrNull { it.lastModified() }
-                if (possibleDir != null && possibleDir.name.contains("vosk")) {
-                    val targetDir = File(modelsDir, "vosk-model-$langFolder")
-                    if (targetDir.exists()) targetDir.deleteRecursively()
-                    possibleDir.renameTo(targetDir)
+                if (extractedDir.renameTo(targetDir)) {
+                    Log.d("VoskDownloader", "Vosk model setup complete at ${targetDir.absolutePath}")
                 } else {
-                    error("Vosk model extraction failed: could not find extracted directory.")
+                    Log.e("VoskDownloader", "Failed to rename ${extractedDir.name} to ${targetDir.name}")
+                    // If rename fails, we can still try to use the extractedDir in the next session if we're careful,
+                    // but for now we'll throw an error to trigger a retry.
+                    error("Vosk model setup failed: could not rename extracted directory.")
                 }
+            } else {
+                error("Vosk model extraction failed: could not find extracted directory.")
             }
 
         } finally {

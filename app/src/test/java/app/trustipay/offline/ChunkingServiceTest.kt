@@ -12,9 +12,10 @@ class ChunkingServiceTest {
         val service = ChunkingService(maxPayloadBytes = 40)
         val payload = "signed-payload-".repeat(30).toByteArray()
 
-        val chunks = service.chunk("session-1", "msg-1", "PAYMENT_OFFER", payload)
+        val chunks = service.chunk("session-1", "msg-1", "PAYMENT_OFFER", payload, previousHash = "prev_hash")
         val result = service.reassemble(chunks.shuffled())
 
+        assertTrue(chunks.all { it.previousHash == "prev_hash" })
         assertTrue(result is ChunkReassemblyResult.Success)
         assertArrayEquals(payload, (result as ChunkReassemblyResult.Success).payload)
     }

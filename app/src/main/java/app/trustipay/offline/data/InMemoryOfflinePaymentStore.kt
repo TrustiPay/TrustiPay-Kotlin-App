@@ -1,6 +1,7 @@
 package app.trustipay.offline.data
 
 import app.trustipay.offline.domain.KnownSpentToken
+import app.trustipay.offline.domain.LocalHashChainEntry
 import app.trustipay.offline.domain.OfflineToken
 import app.trustipay.offline.domain.OfflineTransaction
 import app.trustipay.offline.domain.SyncQueueItem
@@ -13,6 +14,7 @@ class InMemoryOfflinePaymentStore : OfflinePaymentStore {
     private val transactions = linkedMapOf<String, OfflineTransaction>()
     private val queue = linkedMapOf<String, SyncQueueItem>()
     private val knownSpentTokens = linkedMapOf<String, KnownSpentToken>()
+    private val localHashChainEntries = mutableListOf<LocalHashChainEntry>()
 
     override fun upsertToken(token: OfflineToken) {
         tokens[token.tokenId] = token
@@ -60,4 +62,11 @@ class InMemoryOfflinePaymentStore : OfflinePaymentStore {
     }
 
     override fun knownSpentTokenIds(): Set<String> = knownSpentTokens.keys
+
+    override fun latestLocalChainHash(deviceId: String): String? =
+        localHashChainEntries.lastOrNull { it.deviceId == deviceId }?.chainHash
+
+    override fun appendLocalChainEntry(entry: LocalHashChainEntry) {
+        localHashChainEntries += entry
+    }
 }

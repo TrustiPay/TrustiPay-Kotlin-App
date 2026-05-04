@@ -8,6 +8,7 @@ import app.trustipay.api.dto.DeviceRegistrationRequest
 import app.trustipay.api.safeApiCall
 import app.trustipay.offline.security.DeviceKeyManager
 import java.util.Base64
+import java.util.UUID
 
 class KeyRegistrationRepository(
     context: Context,
@@ -27,9 +28,11 @@ class KeyRegistrationRepository(
         val result = safeApiCall {
             apiService.registerDevice(
                 DeviceRegistrationRequest(
-                    devicePublicKeyId = publicKeyId,
-                    devicePublicKeyBase64 = publicKeyBase64,
-                )
+                    deviceId = publicKeyId,
+                    deviceName = "Android offline wallet",
+                    publicSigningKey = publicKeyBase64,
+                ),
+                idempotencyKey = UUID.nameUUIDFromBytes("register:$userId:$publicKeyId".toByteArray()).toString(),
             )
         }
 

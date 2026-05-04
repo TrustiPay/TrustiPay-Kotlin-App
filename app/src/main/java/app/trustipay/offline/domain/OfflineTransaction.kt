@@ -17,6 +17,10 @@ data class OfflineTransaction(
     val requestHash: String?,
     val offerHash: String?,
     val receiptHash: String?,
+    val senderPreviousHash: String? = null,
+    val senderChainHash: String? = null,
+    val receiverPreviousHash: String? = null,
+    val receiverChainHash: String? = null,
     val createdLocalAt: Instant,
     val updatedLocalAt: Instant,
     val lastSyncAttemptAt: Instant? = null,
@@ -29,4 +33,12 @@ data class KnownSpentToken(
     val transactionId: String,
     val seenAtLocal: Instant,
     val source: String,
+)
+
+data class LocalHashChainEntry(
+    val deviceId: String,
+    val transactionId: String,
+    val previousHash: String,
+    val chainHash: String,
+    val createdLocalAt: Instant,
 )

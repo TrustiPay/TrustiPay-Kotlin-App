@@ -2,7 +2,9 @@ package app.trustipay.offline.security
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import app.trustipay.offline.protocol.LocalHashChain
 import java.security.KeyStore
+import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -11,6 +13,7 @@ import javax.crypto.spec.GCMParameterSpec
 data class EncryptedPayload(
     val iv: ByteArray,
     val ciphertext: ByteArray,
+    val previousHash: String? = null,
 )
 
 class LocalEncryptionService(
@@ -31,12 +34,39 @@ class LocalEncryptionService(
         )
     }
 
+    fun encryptWithPreviousHash(
+        plaintext: ByteArray,
+        previousHash: String,
+        aad: ByteArray? = null,
+    ): EncryptedPayload {
+        val chainAad = LocalHashChain.encryptionAad(previousHash, aad)
+        val encrypted = encrypt(plaintext, chainAad)
+        return encrypted.copy(previousHash = previousHash)
+    }
+
     fun decrypt(payload: EncryptedPayload, aad: ByteArray? = null): ByteArray {
         ensureKey()
         val cipher = Cipher.getInstance(Transformation)
         cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(TagBits, payload.iv))
         aad?.let(cipher::updateAAD)
         return cipher.doFinal(payload.ciphertext)
+    }
+
+    fun decryptWithPreviousHash(
+        payload: EncryptedPayload,
+        previousHash: String = payload.previousHash ?: error("previousHash is required."),
+        aad: ByteArray? = null,
+    ): ByteArray =
+        decrypt(payload, LocalHashChain.encryptionAad(previousHash, aad))
+
+    fun EncryptedPayload.encodeForStorage(): ByteArray {
+        val encoder = Base64.getUrlEncoder().withoutPadding()
+        return listOf(
+            "v1",
+            previousHash.orEmpty(),
+            encoder.encodeToString(iv),
+            encoder.encodeToString(ciphertext),
+        ).joinToString(".").toByteArray(Charsets.UTF_8)
     }
 
     private fun ensureKey() {

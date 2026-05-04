@@ -17,6 +17,7 @@ class ChunkingService(
         messageId: String,
         messageType: String,
         payload: ByteArray,
+        previousHash: String? = null,
     ): List<TransportEnvelope> {
         val payloadHash = MessageHasher.sha256Base64Url(payload)
         return payload.asList()
@@ -33,6 +34,7 @@ class ChunkingService(
                         chunkCount = chunks.size,
                         payloadEncoding = PayloadEncoding,
                         payloadHash = payloadHash,
+                        previousHash = previousHash,
                         payloadChunk = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes),
                         sentAtDevice = clock.instant(),
                     )

@@ -77,8 +77,10 @@ class PaymentProtocolEngine(
         senderPublicKeyId: String,
         selectedTokens: List<OfflineToken>,
         signer: PayloadSigner,
+        senderPreviousHash: String = LocalHashChain.GENESIS_HASH,
     ): PaymentOffer {
         require(senderPublicKeyId == signer.publicKeyId) { "Sender signer does not match public key ID." }
+        require(senderPreviousHash.isNotBlank()) { "Sender previous hash is required." }
         val tokenTotal = selectedTokens.sumOf { it.amountMinor }
         require(tokenTotal == request.amountMinor) { "Selected token total must equal request amount." }
         require(selectedTokens.all { it.currency == request.currency }) { "Token currency must match request currency." }
@@ -96,6 +98,7 @@ class PaymentProtocolEngine(
             currency = request.currency,
             offlineTokens = selectedTokens.map { it.toOfferToken() },
             requestHash = MessageHasher.sha256Base64Url(request.canonicalBytes(includeSignature = true)),
+            senderPreviousHash = senderPreviousHash,
             createdAtDevice = clock.instant(),
             nonce = idGenerator.nonce(),
         )
@@ -134,8 +137,10 @@ class PaymentProtocolEngine(
         offer: PaymentOffer,
         receiverDeviceId: String,
         signer: PayloadSigner,
+        receiverPreviousHash: String = LocalHashChain.GENESIS_HASH,
     ): PaymentReceipt {
         require(receiverDeviceId == request.receiverDeviceId) { "Receipt receiver must match request." }
+        require(receiverPreviousHash.isNotBlank()) { "Receiver previous hash is required." }
         val unsigned = PaymentReceipt(
             protocolVersion = ProtocolVersioning.CURRENT_VERSION,
             messageType = ProtocolVersioning.PAYMENT_RECEIPT,
@@ -144,6 +149,7 @@ class PaymentProtocolEngine(
             receiverDeviceId = receiverDeviceId,
             senderDeviceId = offer.senderDeviceId,
             offerHash = MessageHasher.sha256Base64Url(offer.canonicalBytes(includeSignature = true)),
+            receiverPreviousHash = receiverPreviousHash,
             acceptedAtDevice = clock.instant(),
             localValidationResult = LocalValidationResult.ACCEPTED_PENDING_SYNC,
             nonce = idGenerator.nonce(),

@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import app.trustipay.offline.domain.KnownSpentToken
+import app.trustipay.offline.domain.LocalHashChainEntry
 import app.trustipay.offline.domain.OfflineToken
 import app.trustipay.offline.domain.OfflineTokenStatus
 import app.trustipay.offline.domain.OfflineTransaction
@@ -70,6 +71,27 @@ class SQLiteOfflinePaymentStore(
         database.query("known_spent_tokens", arrayOf("token_id"), null, null, null, null, null)
             .useCursor { cursor -> generateSequence { if (cursor.moveToNext()) cursor.getString("token_id") else null }.toSet() }
 
+    override fun latestLocalChainHash(deviceId: String): String? =
+        database.query(
+            "local_hash_chain_entries",
+            arrayOf("chain_hash"),
+            "device_id = ?",
+            arrayOf(deviceId),
+            null,
+            null,
+            "entry_id DESC",
+            "1",
+        ).useCursor { cursor -> if (cursor.moveToFirst()) cursor.getString("chain_hash") else null }
+
+    override fun appendLocalChainEntry(entry: LocalHashChainEntry) {
+        database.insertWithOnConflict(
+            "local_hash_chain_entries",
+            null,
+            entry.toValues(),
+            SQLiteDatabase.CONFLICT_IGNORE,
+        )
+    }
+
     private fun OfflineToken.toValues(): ContentValues = ContentValues().apply {
         val now = Instant.now().toString()
         put("token_id", tokenId)
@@ -102,6 +124,10 @@ class SQLiteOfflinePaymentStore(
         put("request_hash", requestHash)
         put("offer_hash", offerHash)
         put("receipt_hash", receiptHash)
+        put("sender_previous_hash", senderPreviousHash)
+        put("sender_chain_hash", senderChainHash)
+        put("receiver_previous_hash", receiverPreviousHash)
+        put("receiver_chain_hash", receiverChainHash)
         put("created_local_at", createdLocalAt.toString())
         put("updated_local_at", updatedLocalAt.toString())
         put("last_sync_attempt_at", lastSyncAttemptAt?.toString())
@@ -126,6 +152,14 @@ class SQLiteOfflinePaymentStore(
         put("transaction_id", transactionId)
         put("seen_at_local", seenAtLocal.toString())
         put("source", source)
+    }
+
+    private fun LocalHashChainEntry.toValues(): ContentValues = ContentValues().apply {
+        put("device_id", deviceId)
+        put("transaction_id", transactionId)
+        put("previous_hash", previousHash)
+        put("chain_hash", chainHash)
+        put("created_local_at", createdLocalAt.toString())
     }
 
     private fun Cursor.toOfflineToken(): OfflineToken = OfflineToken(
@@ -158,6 +192,10 @@ class SQLiteOfflinePaymentStore(
         requestHash = getNullableString("request_hash"),
         offerHash = getNullableString("offer_hash"),
         receiptHash = getNullableString("receipt_hash"),
+        senderPreviousHash = getNullableString("sender_previous_hash"),
+        senderChainHash = getNullableString("sender_chain_hash"),
+        receiverPreviousHash = getNullableString("receiver_previous_hash"),
+        receiverChainHash = getNullableString("receiver_chain_hash"),
         createdLocalAt = Instant.parse(getString("created_local_at")),
         updatedLocalAt = Instant.parse(getString("updated_local_at")),
         lastSyncAttemptAt = getNullableString("last_sync_attempt_at")?.let(Instant::parse),

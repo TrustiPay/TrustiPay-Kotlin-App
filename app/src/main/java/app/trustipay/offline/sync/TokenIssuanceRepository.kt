@@ -11,13 +11,13 @@ import app.trustipay.offline.data.SQLiteOfflinePaymentStore
 import app.trustipay.offline.domain.OfflineToken
 import app.trustipay.offline.domain.OfflineTokenStatus
 import app.trustipay.offline.domain.SecureOfflineIdGenerator
-import app.trustipay.offline.protocol.CanonicalEncoder
 import app.trustipay.offline.security.DeviceKeyManager
 import app.trustipay.offline.security.PublicKeyCache
 import java.security.KeyFactory
 import java.security.spec.X509EncodedKeySpec
 import java.time.Instant
 import java.util.Base64
+import java.util.UUID
 
 class TokenIssuanceRepository(
     context: Context,
@@ -33,38 +33,29 @@ class TokenIssuanceRepository(
         requestedAmounts: List<Long>,
         currency: String,
     ): ApiResult<Int> {
-        val publicKeyId = deviceKeyManager.getPublicKeyId()
-        val nonce = idGenerator.nonce(16)
-        val timestamp = Instant.now().toString()
-
-        val canonicalPayload = CanonicalEncoder.encode(
-            mapOf(
-                "currency" to currency,
-                "devicePublicKeyId" to publicKeyId,
-                "nonce" to nonce,
-                "requestedAmounts" to requestedAmounts,
-                "timestamp" to timestamp,
-            )
-        )
-        val signature = deviceKeyManager.signAsBase64Url(canonicalPayload)
+        val deviceId = deviceKeyManager.getPublicKeyId()
+        val requestedAmountMinor = requestedAmounts.sum()
 
         val result = safeApiCall {
             apiService.requestOfflineTokens(
                 TokenIssuanceRequest(
-                    devicePublicKeyId = publicKeyId,
-                    requestedAmounts = requestedAmounts,
+                    deviceId = deviceId,
+                    requestedAmountMinor = requestedAmountMinor,
                     currency = currency,
-                    nonce = nonce,
-                    timestamp = timestamp,
-                    deviceSignature = signature,
-                )
+                    preferredDenominations = requestedAmounts,
+                ),
+                idempotencyKey = UUID.nameUUIDFromBytes(
+                    "tokens:$deviceId:$currency:$requestedAmountMinor:${idGenerator.nonce(8)}".toByteArray()
+                ).toString(),
             )
         }
 
         return when (result) {
             is ApiResult.Success -> {
                 val response = result.data
-                cacheIssuerPublicKey(response.issuerPublicKeyId, response.issuerPublicKeyBase64)
+                if (response.issuerPublicKeyId != null && response.issuerPublicKeyBase64 != null) {
+                    cacheIssuerPublicKey(response.issuerPublicKeyId, response.issuerPublicKeyBase64)
+                }
                 val tokens = response.tokens.map { it.toDomain() }
                 tokens.forEach { store.upsertToken(it) }
                 ApiResult.Success(tokens.size)
@@ -85,16 +76,16 @@ class TokenIssuanceRepository(
 
     private fun IssuedTokenDto.toDomain(): OfflineToken = OfflineToken(
         tokenId = tokenId,
-        ownerUserId = ownerUserId,
-        ownerDeviceId = ownerDeviceId,
+        ownerUserId = requireNotNull(ownerUserId) { "Issued token missing ownerUserId." },
+        ownerDeviceId = requireNotNull(ownerDeviceId) { "Issued token missing ownerDeviceId." },
         amountMinor = amountMinor,
         currency = currency,
-        issuedAtServer = Instant.parse(issuedAtServer),
-        expiresAtServer = Instant.parse(expiresAtServer),
-        issuerKeyId = issuerKeyId,
-        nonce = nonce,
+        issuedAtServer = Instant.parse(requireNotNull(issuedAtServer ?: issuedAt) { "Issued token missing issuedAt." }),
+        expiresAtServer = Instant.parse(requireNotNull(expiresAtServer ?: expiresAt) { "Issued token missing expiresAt." }),
+        issuerKeyId = requireNotNull(issuerKeyId ?: serverKeyId) { "Issued token missing issuer key ID." },
+        nonce = requireNotNull(nonce) { "Issued token missing nonce." },
         serverSignature = serverSignature,
-        canonicalPayload = Base64.getUrlDecoder().decode(canonicalPayload),
+        canonicalPayload = Base64.getUrlDecoder().decode(requireNotNull(canonicalPayload) { "Issued token missing canonical payload." }),
         status = OfflineTokenStatus.AVAILABLE,
     )
 }

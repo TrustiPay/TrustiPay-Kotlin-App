@@ -672,8 +672,8 @@ class VoiceAssistantViewModel(
     }
 
     private companion object {
-        const val LiveTranscriptionIntervalMs = 2_500L
-        const val MinimumNewSpeechBytesForLiveUpdate = 12_000
+        const val LiveTranscriptionIntervalMs = 1500L
+        const val MinimumNewSpeechBytesForLiveUpdate = 8000
     }
 }
 

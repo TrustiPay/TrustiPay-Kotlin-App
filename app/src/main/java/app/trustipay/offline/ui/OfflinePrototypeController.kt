@@ -3,6 +3,7 @@ package app.trustipay.offline.ui
 import app.trustipay.offline.OfflineFeatureFlags
 import app.trustipay.offline.data.InMemoryOfflinePaymentStore
 import app.trustipay.offline.domain.KnownSpentToken
+import app.trustipay.offline.domain.LocalHashChainEntry
 import app.trustipay.offline.domain.Money
 import app.trustipay.offline.domain.OfflineIdGenerator
 import app.trustipay.offline.domain.OfflineTransaction
@@ -12,6 +13,7 @@ import app.trustipay.offline.domain.TransactionState
 import app.trustipay.offline.domain.TransportType
 import app.trustipay.offline.protocol.ChunkingService
 import app.trustipay.offline.protocol.JavaSigningKeyFactory
+import app.trustipay.offline.protocol.LocalHashChain
 import app.trustipay.offline.protocol.MessageHasher
 import app.trustipay.offline.protocol.OfflineTokenFactory
 import app.trustipay.offline.protocol.OfflineTokenWallet
@@ -99,6 +101,7 @@ class OfflinePrototypeController private constructor(
 
         return runCatching {
             wallet.reserveTokens(selected.tokens.map { it.tokenId })
+            val senderPreviousHash = store.latestLocalChainHash(SenderDeviceId) ?: LocalHashChain.GENESIS_HASH
             val offer = engine.createPaymentOffer(
                 request = request,
                 senderUserAlias = "Saman",
@@ -106,6 +109,7 @@ class OfflinePrototypeController private constructor(
                 senderPublicKeyId = keys.sender.publicKeyId,
                 selectedTokens = selected.tokens,
                 signer = keys.sender.signer(),
+                senderPreviousHash = senderPreviousHash,
             )
             val offerValidation = engine.validatePaymentOffer(
                 offer = offer,
@@ -119,11 +123,13 @@ class OfflinePrototypeController private constructor(
                 return snapshot(offerValidation.reason)
             }
 
+            val receiverPreviousHash = store.latestLocalChainHash(ReceiverDeviceId) ?: LocalHashChain.GENESIS_HASH
             val receipt = engine.createPaymentReceipt(
                 request = request,
                 offer = offer,
                 receiverDeviceId = ReceiverDeviceId,
                 signer = keys.receiver.signer(),
+                receiverPreviousHash = receiverPreviousHash,
             )
             val receiptValidation = engine.validatePaymentReceipt(receipt, request, offer, verifier)
             if (!receiptValidation.accepted) {
@@ -147,6 +153,35 @@ class OfflinePrototypeController private constructor(
             val requestPayload = request.canonicalBytes(includeSignature = true)
             val offerPayload = offer.canonicalBytes(includeSignature = true)
             val receiptPayload = receipt.canonicalBytes(includeSignature = true)
+            val requestHash = MessageHasher.sha256Base64Url(requestPayload)
+            val offerHash = MessageHasher.sha256Base64Url(offerPayload)
+            val receiptHash = MessageHasher.sha256Base64Url(receiptPayload)
+            val senderChainHash = LocalHashChain.transactionHash(
+                deviceId = SenderDeviceId,
+                previousHash = senderPreviousHash,
+                transactionId = offer.transactionId,
+                requestHash = requestHash,
+                offerHash = offerHash,
+                receiptHash = receiptHash,
+                amountMinor = offer.amountMinor,
+                currency = offer.currency,
+                transportType = TransportType.QR,
+                createdAtDevice = now,
+            )
+            val receiverChainHash = LocalHashChain.transactionHash(
+                deviceId = ReceiverDeviceId,
+                previousHash = receiverPreviousHash,
+                transactionId = offer.transactionId,
+                requestHash = requestHash,
+                offerHash = offerHash,
+                receiptHash = receiptHash,
+                amountMinor = offer.amountMinor,
+                currency = offer.currency,
+                transportType = TransportType.QR,
+                createdAtDevice = now,
+            )
+            store.appendLocalChainEntry(LocalHashChainEntry(SenderDeviceId, offer.transactionId, senderPreviousHash, senderChainHash, now))
+            store.appendLocalChainEntry(LocalHashChainEntry(ReceiverDeviceId, offer.transactionId, receiverPreviousHash, receiverChainHash, now))
             val transaction = OfflineTransaction(
                 transactionId = offer.transactionId,
                 requestId = request.requestId,
@@ -159,9 +194,13 @@ class OfflinePrototypeController private constructor(
                 requestPayload = requestPayload,
                 offerPayload = offerPayload,
                 receiptPayload = receiptPayload,
-                requestHash = MessageHasher.sha256Base64Url(requestPayload),
-                offerHash = MessageHasher.sha256Base64Url(offerPayload),
-                receiptHash = MessageHasher.sha256Base64Url(receiptPayload),
+                requestHash = requestHash,
+                offerHash = offerHash,
+                receiptHash = receiptHash,
+                senderPreviousHash = senderPreviousHash,
+                senderChainHash = senderChainHash,
+                receiverPreviousHash = receiverPreviousHash,
+                receiverChainHash = receiverChainHash,
                 createdLocalAt = now,
                 updatedLocalAt = now,
             )
@@ -172,6 +211,7 @@ class OfflinePrototypeController private constructor(
                 messageId = idGenerator.newId("msg"),
                 messageType = receipt.messageType,
                 payload = receiptPayload,
+                previousHash = receiverPreviousHash,
             )
             snapshot("Accepted offline - pending sync. QR receipt payload: ${receiptChunks.size} chunk(s).")
         }.getOrElse { error ->

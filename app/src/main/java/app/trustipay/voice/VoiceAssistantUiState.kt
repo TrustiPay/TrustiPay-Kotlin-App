@@ -38,9 +38,9 @@ data class VoiceAssistantUiState(
             captureState != VoiceCaptureState.Finalizing
 }
 
-enum class AssistantLanguage(val label: String, val voskModelUrl: String) {
+enum class AssistantLanguage(val label: String, val voskModelUrl: String?) {
     Auto("Auto", "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"),
-    Sinhala("Sinhala", "https://alphacephei.com/vosk/models/vosk-model-small-si-0.15.zip"),
+    Sinhala("Sinhala", "https://huggingface.co/rhasspy/vosk-models/resolve/main/si/vosk-model-small-si-0.15.zip"),
     English("English", "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip")
 }
 
