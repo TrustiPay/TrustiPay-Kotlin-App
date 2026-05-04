@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.trustipay.AppContainer
 import app.trustipay.api.ApiResult
+import app.trustipay.auth.domain.AuthToken
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,6 +68,20 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     fun logout() {
         repository.logout()
+    }
+
+    fun bypassLogin() {
+        viewModelScope.launch {
+            val dummyToken = AuthToken(
+                accessToken = "dummy_token",
+                refreshToken = "dummy_refresh",
+                expiresAt = System.currentTimeMillis() / 1000 + 36000,
+                userId = "test-user-id",
+                displayName = "Test User"
+            )
+            AppContainer.tokenStore.save(dummyToken)
+            _navEvents.send(AuthNavEvent.NavigateToHome)
+        }
     }
 
     fun clearError() {

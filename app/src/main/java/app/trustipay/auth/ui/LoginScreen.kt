@@ -115,6 +115,12 @@ fun LoginScreen(
             TextButton(onClick = onNavigateToRegister) {
                 Text("Don't have an account? Register")
             }
+
+            Spacer(Modifier.height(8.dp))
+
+            TextButton(onClick = { viewModel.bypassLogin() }) {
+                Text("[DEV] Bypass Login (Testing Only)", color = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }

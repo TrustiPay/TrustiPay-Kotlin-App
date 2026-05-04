@@ -29,15 +29,20 @@ class LocalWhisperTranscriber(
     fun isModelDownloaded(): Boolean =
         CactusModelManager.isModelDownloaded(modelSlug)
 
-    fun isVoskModelDownloaded(): Boolean {
-        val voskDir = File(modelStorageDirectory(), VoskModelFolder)
+    fun isVoskModelDownloaded(language: AssistantLanguage): Boolean {
+        val langFolder = language.name.lowercase()
+        val voskDir = File(modelStorageDirectory(), "vosk-model-$langFolder")
         return voskDir.exists() && voskDir.isDirectory && voskDir.listFiles()?.isNotEmpty() == true
     }
 
     fun deleteModel(): Boolean {
         val whisperDeleted = CactusModelManager.deleteModel(modelSlug)
-        val voskDir = File(modelStorageDirectory(), VoskModelFolder)
-        val voskDeleted = if (voskDir.exists()) voskDir.deleteRecursively() else false
+        val modelsDir = File(modelStorageDirectory())
+        val voskDirs = modelsDir.listFiles { f -> f.isDirectory && f.name.contains("vosk-model") }
+        var voskDeleted = false
+        voskDirs?.forEach { dir ->
+            if (dir.deleteRecursively()) voskDeleted = true
+        }
         return whisperDeleted || voskDeleted
     }
 
@@ -48,16 +53,16 @@ class LocalWhisperTranscriber(
         stt.downloadModel(modelSlug)
     }
 
-    suspend fun downloadVoskModel() = withContext(Dispatchers.IO) {
-        if (isVoskModelDownloaded()) return@withContext
-
+    suspend fun downloadVoskModel(language: AssistantLanguage) = withContext(Dispatchers.IO) {
+        val url = language.voskModelUrl
+        val langFolder = language.name.lowercase()
         val modelsDir = File(modelStorageDirectory())
         if (!modelsDir.exists()) modelsDir.mkdirs()
 
-        val tempZip = File(modelsDir, "vosk_tmp.zip")
+        val tempZip = File(modelsDir, "vosk_${langFolder}_tmp.zip")
         try {
-            Log.d("VoskDownloader", "Downloading Vosk model from $VoskModelUrl")
-            val connection = URL(VoskModelUrl).openConnection() as HttpURLConnection
+            Log.d("VoskDownloader", "Downloading Vosk $langFolder model from $url")
+            val connection = URL(url).openConnection() as HttpURLConnection
             connection.connect()
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
                 error("Failed to download Vosk model: ${connection.responseCode}")
@@ -72,23 +77,51 @@ class LocalWhisperTranscriber(
             Log.d("VoskDownloader", "Extracting Vosk model...")
             extractZipTo(tempZip, modelsDir)
             
-            // The zip extracts to a folder like "vosk-model-small-en-us-0.15"
-            // Find it and rename to "vosk-model"
-            val extractedDir = modelsDir.listFiles { f -> f.isDirectory && f.name.contains("vosk-model") && f.name != VoskModelFolder }
-                ?.firstOrNull()
+            // Find the extracted directory (it usually has a name like vosk-model-small-...)
+            val extractedDir = modelsDir.listFiles { f -> f.isDirectory && f.name.contains("vosk-model") && f.name != "vosk-model" && !f.name.startsWith("vosk-model-") }
+                ?.firstOrNull() ?: modelsDir.listFiles { f -> f.isDirectory && f.name.contains("vosk-model") && !f.name.endsWith("-si") && !f.name.endsWith("-en") && f.name != "vosk-model" }?.firstOrNull()
             
             if (extractedDir != null) {
-                val targetDir = File(modelsDir, VoskModelFolder)
+                val targetDir = File(modelsDir, "vosk-model-$langFolder")
                 if (targetDir.exists()) targetDir.deleteRecursively()
                 extractedDir.renameTo(targetDir)
                 Log.d("VoskDownloader", "Vosk model setup complete at ${targetDir.absolutePath}")
             } else {
-                error("Vosk model extraction failed: could not find extracted directory.")
+                // If we can't find it by name, check if a new directory was created
+                val allDirs = modelsDir.listFiles { f -> f.isDirectory }
+                val possibleDir = allDirs?.maxByOrNull { it.lastModified() }
+                if (possibleDir != null && possibleDir.name.contains("vosk")) {
+                    val targetDir = File(modelsDir, "vosk-model-$langFolder")
+                    if (targetDir.exists()) targetDir.deleteRecursively()
+                    possibleDir.renameTo(targetDir)
+                } else {
+                    error("Vosk model extraction failed: could not find extracted directory.")
+                }
             }
 
         } finally {
             if (tempZip.exists()) tempZip.delete()
         }
+    }
+
+    suspend fun downloadLlmModel(url: String, targetFile: File) = withContext(Dispatchers.IO) {
+        if (targetFile.exists()) return@withContext
+        
+        targetFile.parentFile?.mkdirs()
+        Log.d("LlmDownloader", "Downloading LLM model from $url to ${targetFile.absolutePath}")
+        
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connect()
+        if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+            error("Failed to download LLM model: ${connection.responseCode}")
+        }
+        
+        connection.inputStream.use { input ->
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        Log.d("LlmDownloader", "LLM model download complete.")
     }
 
     private fun extractZipTo(zipFile: File, targetDir: File) {

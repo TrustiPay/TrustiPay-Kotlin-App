@@ -37,6 +37,15 @@ class LocalLlmBrain internal constructor(
 
     fun isModelAvailable(): Boolean = findModelFile() != null
 
+    fun getPreferredModelFile(): File {
+        val externalMediaDir = externalMediaDirectories().firstOrNull()
+        return if (externalMediaDir != null) {
+            File(File(externalMediaDir, ModelsDirectoryName), RequestedModelFilename)
+        } else {
+            File(File(appContext.filesDir, ModelsDirectoryName), RequestedModelFilename)
+        }
+    }
+
     fun analysisState(): LlmAnalysisState = state
 
     suspend fun initialize(): LlmAnalysisState = withContext(Dispatchers.IO) {
@@ -46,11 +55,17 @@ class LocalLlmBrain internal constructor(
                 return@withLock state
             }
 
-            val modelFile = findModelFile()
+            var modelFile = findModelFile()
             if (modelFile == null) {
                 initializationError = missingModelMessage()
                 state = LlmAnalysisState.Missing
                 return@withLock state
+            }
+
+            // If the model is in a shared/external directory, try to copy it to internal storage.
+            // This bypasses Scoped Storage open() restrictions that often affect native LLM engines.
+            if (isExternalPath(modelFile.absolutePath)) {
+                modelFile = tryCopyModelToInternal(modelFile)
             }
 
             state = LlmAnalysisState.Initializing
@@ -68,7 +83,7 @@ class LocalLlmBrain internal constructor(
                 initializationError = throwable.toLlmFriendlyMessage("LiteRT-LM initialization failed.")
                 state = LlmAnalysisState.Failed
                 closeEngine()
-                Log.e(Tag, "LiteRT-LM initialization failed", throwable)
+                Log.e(Tag, "LiteRT-LM initialization failed at ${modelFile.absolutePath}", throwable)
             }
 
             state
@@ -121,16 +136,48 @@ class LocalLlmBrain internal constructor(
 
     private fun missingModelMessage(): String {
         val packageName = appContext.packageName
+        val internalPath = getInternalModelFile().absolutePath
         val requestedPath = "/sdcard/Android/media/$packageName/models/$RequestedModelFilename"
         val searchDirs = searchDirectories().joinToString(", ") { it.absolutePath }
-        return "LiteRT-LM model file not found or inaccessible. Place $RequestedModelFilename at $requestedPath, or put one of $PreferredModelFilenames in: $searchDirs"
+        return "LiteRT-LM model file inaccessible or not found. Place $RequestedModelFilename at $requestedPath, or move it to $internalPath. Search dirs: $searchDirs"
     }
+
+    private fun isExternalPath(path: String): Boolean {
+        return path.contains("/storage/emulated/0/") || path.startsWith("/sdcard/")
+    }
+
+    private fun tryCopyModelToInternal(externalFile: File): File {
+        val internalFile = getInternalModelFile()
+        
+        // If it already exists and seems correct (same size), use internal one
+        if (internalFile.exists() && internalFile.length() == externalFile.length()) {
+            return internalFile
+        }
+
+        return try {
+            internalFile.parentFile?.mkdirs()
+            Log.d(Tag, "Copying model from ${externalFile.absolutePath} to internal storage...")
+            externalFile.inputStream().use { input ->
+                internalFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            Log.d(Tag, "Successfully copied model to internal storage: ${internalFile.absolutePath}")
+            internalFile
+        } catch (e: Exception) {
+            Log.e(Tag, "Failed to copy model to internal storage", e)
+            externalFile // Fallback to original and hope for the best
+        }
+    }
+
+    private fun getInternalModelFile(): File =
+        File(File(appContext.filesDir, ModelsDirectoryName), RequestedModelFilename)
+
 
     private fun requestedModelFiles(): List<File> {
         val files = mutableListOf<File>()
-        val packageName = appContext.packageName
+        requestedExternalStorageModelFile("com.trustipay")?.let(files::add)
         
-        requestedExternalStorageModelFile(packageName)?.let(files::add)
         externalMediaDirectories().forEach { mediaDir ->
             files += File(File(mediaDir, ModelsDirectoryName), RequestedModelFilename)
         }
@@ -145,9 +192,10 @@ class LocalLlmBrain internal constructor(
 
     private fun searchDirectories(): List<File> {
         val directories = mutableListOf<File>()
-        val packageName = appContext.packageName
         
-        requestedExternalStorageModelFile(packageName)?.parentFile?.let(directories::add)
+        requestedExternalStorageModelFile("app.trustipay")?.parentFile?.let(directories::add)
+        requestedExternalStorageModelFile("com.trustipay")?.parentFile?.let(directories::add)
+
         directories += File(appContext.filesDir, ModelsDirectoryName)
         directories += appContext.filesDir
         appContext.getExternalFilesDir(null)?.let { externalFilesDir ->
@@ -226,11 +274,12 @@ class LocalLlmBrain internal constructor(
         engine = null
     }
 
-    private companion object {
+    companion object {
         const val Tag = "LocalLlmBrain"
         const val SystemInstruction = "You extract safe draft banking intents from Sinhala and English voice requests for TrustiPay. Never execute a banking action."
         const val ModelsDirectoryName = "models"
         const val RequestedModelFilename = "gemma-4-E2B-it.litertlm"
+        const val LlmModelUrl = "https://huggingface.co/google/gemma-2b-it-cpu-int4/resolve/main/gemma-2b-it-cpu-int4.bin"
 
         val PreferredModelFilenames = listOf(
             RequestedModelFilename,

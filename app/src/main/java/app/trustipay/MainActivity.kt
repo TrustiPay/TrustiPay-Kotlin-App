@@ -63,34 +63,57 @@ class MainActivity : ComponentActivity() {
         CactusContextInitializer.initialize(this)
         CactusConfig.isTelemetryEnabled = false
         enableEdgeToEdge()
-        scheduleOfflineSync()
         setContent {
             TrustiPayTheme {
-                TrustiPayApp()
+                TrustiPayApp(
+                    onAuthGateChanged = { isLoggedIn ->
+                        if (isLoggedIn) scheduleWorkers() else cancelWorkers()
+                    }
+                )
             }
         }
     }
 
-    private fun scheduleOfflineSync() {
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+    private fun scheduleWorkers() {
+        val workManager = WorkManager.getInstance(this)
+        
+        val syncConstraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+            
+        workManager.enqueueUniquePeriodicWork(
             "offline_sync",
             ExistingPeriodicWorkPolicy.KEEP,
             PeriodicWorkRequestBuilder<OfflineSyncWorker>(15, TimeUnit.MINUTES)
-                .setConstraints(
-                    Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
-                        .build()
-                )
+                .setConstraints(syncConstraints)
                 .build(),
         )
+        
+        workManager.enqueueUniquePeriodicWork(
+            "token_refresh",
+            ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequestBuilder<app.trustipay.offline.sync.TokenRefreshWorker>(24, TimeUnit.HOURS)
+                .setConstraints(syncConstraints)
+                .build(),
+        )
+    }
+
+    private fun cancelWorkers() {
+        val workManager = WorkManager.getInstance(this)
+        workManager.cancelUniqueWork("offline_sync")
+        workManager.cancelUniqueWork("token_refresh")
     }
 }
 
 @Composable
-fun TrustiPayApp() {
+fun TrustiPayApp(onAuthGateChanged: (Boolean) -> Unit = {}) {
     val authViewModel: AuthViewModel = viewModel()
     val isLoggedIn = remember {
         mutableStateOf(AppContainer.tokenStore.load()?.isExpired() == false)
+    }
+
+    LaunchedEffect(isLoggedIn.value) {
+        onAuthGateChanged(isLoggedIn.value)
     }
 
     LaunchedEffect(Unit) {

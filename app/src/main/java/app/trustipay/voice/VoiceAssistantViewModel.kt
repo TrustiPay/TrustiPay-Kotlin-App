@@ -98,7 +98,7 @@ class VoiceAssistantViewModel(
                 it.copy(
                     modelState = VoiceModelState.Downloading,
                     captureState = VoiceCaptureState.Idle,
-                    statusMessage = "Downloading models for on-device transcription...",
+                    statusMessage = "Downloading all models for on-device transcription...",
                     errorMessage = null,
                     modelStorageDirectory = transcriber.modelStorageDirectory(),
                 )
@@ -106,14 +106,27 @@ class VoiceAssistantViewModel(
 
             try {
                 val whisperJob = async { transcriber.downloadModel() }
-                val voskJob = async { transcriber.downloadVoskModel() }
+                val voskEnJob = async { 
+                    transcriber.downloadVoskModel(AssistantLanguage.English) 
+                }
+                val voskSiJob = async {
+                    transcriber.downloadVoskModel(AssistantLanguage.Sinhala)
+                }
+                val llmJob = async {
+                    if (!llmBrain.isModelAvailable()) {
+                        transcriber.downloadLlmModel(
+                            url = LocalLlmBrain.LlmModelUrl,
+                            targetFile = llmBrain.getPreferredModelFile()
+                        )
+                    }
+                }
                 
-                awaitAll(whisperJob, voskJob)
+                awaitAll(whisperJob, voskEnJob, voskSiJob, llmJob)
                 
                 updateState {
                     it.copy(
                         modelState = VoiceModelState.Downloaded,
-                        statusMessage = "Models downloaded. Initializing local transcription...",
+                        statusMessage = "All models downloaded. Initializing local transcription...",
                         errorMessage = null,
                     )
                 }
@@ -283,7 +296,23 @@ class VoiceAssistantViewModel(
     }
 
     fun setLanguage(language: AssistantLanguage) {
+        val oldLanguage = _uiState.value.selectedLanguage
         updateState { it.copy(selectedLanguage = language) }
+        
+        if (oldLanguage != language && _uiState.value.modelState == VoiceModelState.Ready) {
+            if (transcriber.isVoskModelDownloaded(language)) {
+                initializeVoskLiveTranscriber(force = true)
+            } else {
+                // If the specific language model isn't downloaded, we might need to download it.
+                // For now, we update the status message.
+                updateState {
+                    it.copy(
+                        statusMessage = "Vosk model for ${language.label} is missing. Download models again to get it.",
+                        liveTranscriptionLabel = "Model missing for ${language.label}"
+                    )
+                }
+            }
+        }
     }
 
     fun cancelActiveWork() {
@@ -346,7 +375,7 @@ class VoiceAssistantViewModel(
                         llmAnalysisState = llmBrain.analysisState(),
                     )
                 }
-                initializeVoskLiveTranscriber()
+                initializeVoskLiveTranscriber(force = true)
             } catch (throwable: CancellationException) {
                 throw throwable
             } catch (throwable: Throwable) {
@@ -355,9 +384,10 @@ class VoiceAssistantViewModel(
         }
     }
 
-    private fun initializeVoskLiveTranscriber() {
+    private fun initializeVoskLiveTranscriber(force: Boolean = false) {
         viewModelScope.launch {
-            val liveStatus = voskTranscriber.initialize()
+            val language = _uiState.value.selectedLanguage
+            val liveStatus = voskTranscriber.initialize(language = language, force = force)
             updateState {
                 if (it.modelState != VoiceModelState.Ready ||
                     it.captureState != VoiceCaptureState.Idle

@@ -29,7 +29,11 @@ class TrustiPayWorkerFactory : WorkerFactory() {
                     apiService = AppContainer.apiService,
                     deviceKeyManager = app.trustipay.offline.security.DeviceKeyManager(),
                 )
-                OfflineSyncWorker(appContext, workerParameters, syncRepo)
+                val poller = SettlementStatusPoller(
+                    store = store,
+                    apiService = AppContainer.apiService,
+                )
+                OfflineSyncWorker(appContext, workerParameters, syncRepo, poller, store)
             }
             TokenRefreshWorker::class.java.name -> {
                 TokenRefreshWorker(appContext, workerParameters, AppContainer.tokenIssuanceRepository)

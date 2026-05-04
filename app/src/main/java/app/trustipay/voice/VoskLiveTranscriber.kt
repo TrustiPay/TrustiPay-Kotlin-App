@@ -30,47 +30,43 @@ class VoskLiveTranscriber(private val context: Context) : Closeable {
 
     fun status(): VoskLiveStatus = currentStatus
 
-    suspend fun initialize(): VoskLiveStatus = withContext(Dispatchers.IO) {
+    suspend fun initialize(language: AssistantLanguage, force: Boolean = false): VoskLiveStatus = withContext(Dispatchers.IO) {
         val existingStatus = currentStatus
-        if (existingStatus.isReady) return@withContext existingStatus
+        if (existingStatus.isReady && !force) return@withContext existingStatus
 
         updateStatus(VoskLiveStatus.Initializing)
 
-        // Try bundled assets first
-        val assetModelDirectory = findBundledAssetModelDirectory()
-        if (assetModelDirectory != null) {
-            val unpackedModel = runCatching {
-                unpackModel(assetModelDirectory)
-            }.getOrElse { throwable ->
-                return@withContext updateStatus(
-                    VoskLiveStatus.unavailable(
-                        "Vosk model '$assetModelDirectory' could not be unpacked: ${throwable.message.orEmpty()}"
-                    )
-                )
-            }
-            return@withContext finishInitialization(unpackedModel)
-        }
-
         // Try downloaded model in internal storage
-        val downloadedModelDir = File(appContext?.filesDir, "models/vosk-model")
-        if (downloadedModelDir.exists() && downloadedModelDir.isDirectory) {
-            val loadedModel = runCatching {
-                Model(downloadedModelDir.absolutePath)
-            }.getOrElse { throwable ->
+        val langFolder = language.name.lowercase()
+        val downloadedModelDir = File(appContext.filesDir, "models/vosk-model-$langFolder")
+        
+        if (!downloadedModelDir.exists() || !downloadedModelDir.isDirectory) {
+            // Fallback to generic name if specific one doesn't exist
+            val genericModelDir = File(appContext.filesDir, "models/vosk-model")
+            if (genericModelDir.exists() && genericModelDir.isDirectory) {
+                // If it exists, use it but maybe it's the wrong language. 
+                // For now, we proceed to load what we have.
+            } else {
                 return@withContext updateStatus(
                     VoskLiveStatus.unavailable(
-                        "Downloaded Vosk model could not be loaded: ${throwable.message.orEmpty()}"
+                        "No Vosk model found for ${language.label}. It will be downloaded with the Whisper model."
                     )
                 )
             }
-            return@withContext finishInitialization(loadedModel)
         }
 
-        updateStatus(
-            VoskLiveStatus.unavailable(
-                "No Vosk model found. It will be downloaded with the Whisper model."
+        val targetPath = if (downloadedModelDir.exists()) downloadedModelDir.absolutePath else File(appContext.filesDir, "models/vosk-model").absolutePath
+
+        val loadedModel = runCatching {
+            Model(targetPath)
+        }.getOrElse { throwable ->
+            return@withContext updateStatus(
+                VoskLiveStatus.unavailable(
+                    "Vosk model could not be loaded: ${throwable.message.orEmpty()}"
+                )
             )
-        )
+        }
+        return@withContext finishInitialization(loadedModel)
     }
 
     private fun finishInitialization(loadedModel: Model): VoskLiveStatus {

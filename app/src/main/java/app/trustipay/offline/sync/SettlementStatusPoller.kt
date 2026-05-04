@@ -18,8 +18,8 @@ class SettlementStatusPoller(
         )
     }
 
-    suspend fun pollAndApply(transactionId: String) {
-        val api = apiService ?: return
+    suspend fun pollAndApply(transactionId: String): Boolean {
+        val api = apiService ?: return false
         val result = safeApiCall { api.getSettlementStatus(transactionId) }
         if (result is ApiResult.Success) {
             val status = result.data
@@ -31,9 +31,11 @@ class SettlementStatusPoller(
                     status.rejectionReason?.contains("expired", ignoreCase = true) == true -> ServerSettlementResult.EXPIRED_TOKEN
                     else -> ServerSettlementResult.DISPUTED
                 }
-                else -> return
+                else -> return false
             }
             applyServerResult(transactionId, settlementResult, status.rejectionReason)
+            return true
         }
+        return false
     }
 }
