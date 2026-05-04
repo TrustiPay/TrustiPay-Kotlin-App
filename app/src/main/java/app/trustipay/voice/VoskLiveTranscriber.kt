@@ -4,6 +4,7 @@ import android.content.Context
 import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.StorageService
+import java.io.File
 import java.io.IOException
 import java.io.Closeable
 import kotlinx.coroutines.Dispatchers
@@ -33,32 +34,53 @@ class VoskLiveTranscriber(private val context: Context) : Closeable {
         val existingStatus = currentStatus
         if (existingStatus.isReady) return@withContext existingStatus
 
-        val assetModelDirectory = findBundledAssetModelDirectory()
-            ?: return@withContext updateStatus(
-                VoskLiveStatus.unavailable(
-                    "No bundled Vosk model assets found. Add a model under assets/model-en-us or assets/vosk-model."
-                )
-            )
-
         updateStatus(VoskLiveStatus.Initializing)
 
-        val unpackedModel = runCatching {
-            unpackModel(assetModelDirectory)
-        }.getOrElse { throwable ->
-            return@withContext updateStatus(
-                VoskLiveStatus.unavailable(
-                    "Vosk model '$assetModelDirectory' could not be unpacked: ${throwable.message.orEmpty()}"
+        // Try bundled assets first
+        val assetModelDirectory = findBundledAssetModelDirectory()
+        if (assetModelDirectory != null) {
+            val unpackedModel = runCatching {
+                unpackModel(assetModelDirectory)
+            }.getOrElse { throwable ->
+                return@withContext updateStatus(
+                    VoskLiveStatus.unavailable(
+                        "Vosk model '$assetModelDirectory' could not be unpacked: ${throwable.message.orEmpty()}"
+                    )
                 )
-            )
+            }
+            return@withContext finishInitialization(unpackedModel)
         }
 
+        // Try downloaded model in internal storage
+        val downloadedModelDir = File(appContext?.filesDir, "models/vosk-model")
+        if (downloadedModelDir.exists() && downloadedModelDir.isDirectory) {
+            val loadedModel = runCatching {
+                Model(downloadedModelDir.absolutePath)
+            }.getOrElse { throwable ->
+                return@withContext updateStatus(
+                    VoskLiveStatus.unavailable(
+                        "Downloaded Vosk model could not be loaded: ${throwable.message.orEmpty()}"
+                    )
+                )
+            }
+            return@withContext finishInitialization(loadedModel)
+        }
+
+        updateStatus(
+            VoskLiveStatus.unavailable(
+                "No Vosk model found. It will be downloaded with the Whisper model."
+            )
+        )
+    }
+
+    private fun finishInitialization(loadedModel: Model): VoskLiveStatus {
         val newRecognizer = runCatching {
-            createRecognizer(unpackedModel)
+            createRecognizer(loadedModel)
         }.getOrElse { throwable ->
-            unpackedModel.close()
-            return@withContext updateStatus(
+            loadedModel.close()
+            return updateStatus(
                 VoskLiveStatus.unavailable(
-                    "Vosk model '$assetModelDirectory' could not be loaded: ${throwable.message.orEmpty()}"
+                    "Vosk recognizer could not be created: ${throwable.message.orEmpty()}"
                 )
             )
         }
@@ -66,12 +88,12 @@ class VoskLiveTranscriber(private val context: Context) : Closeable {
         synchronized(lock) {
             recognizer?.close()
             model?.close()
-            model = unpackedModel
+            model = loadedModel
             recognizer = newRecognizer
             committedText = ""
             currentStatus = VoskLiveStatus.Ready
         }
-        VoskLiveStatus.Ready
+        return VoskLiveStatus.Ready
     }
 
     fun resetSession() {

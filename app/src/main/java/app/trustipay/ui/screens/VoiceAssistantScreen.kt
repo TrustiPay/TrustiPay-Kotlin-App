@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +64,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.trustipay.ui.theme.TrustiPayPrimary
 import app.trustipay.ui.theme.TrustiPaySecondary
 import app.trustipay.ui.theme.TrustiPayTertiary
+import app.trustipay.voice.AssistantLanguage
 import app.trustipay.voice.BankingIntent
 import app.trustipay.voice.BankingIntentType
 import app.trustipay.voice.VoiceAssistantUiState
@@ -116,7 +119,7 @@ fun VoiceAssistantScreen(
             },
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(16.dp)
+                .padding(top=60.dp, end=24.dp)
         ) {
             Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
         }
@@ -135,7 +138,16 @@ fun VoiceAssistantScreen(
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+
+            LanguageSelector(
+                selectedLanguage = uiState.selectedLanguage,
+                onLanguageSelected = viewModel::setLanguage,
+                enabled = uiState.captureState == VoiceCaptureState.Idle ||
+                    uiState.captureState == VoiceCaptureState.Error
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
 
             VoiceRippleEffect(
                 isListening = uiState.captureState == VoiceCaptureState.Listening ||
@@ -359,6 +371,39 @@ private fun ModelSetupPanel(
                     Text("Delete voice model")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun LanguageSelector(
+    selectedLanguage: AssistantLanguage,
+    onLanguageSelected: (AssistantLanguage) -> Unit,
+    enabled: Boolean
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+    ) {
+        AssistantLanguage.entries.forEach { language ->
+            FilterChip(
+                selected = selectedLanguage == language,
+                onClick = { onLanguageSelected(language) },
+                label = { Text(language.label) },
+                enabled = enabled,
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = TrustiPayTertiary,
+                    selectedLabelColor = Color.Black,
+                    labelColor = Color.White,
+                    containerColor = Color.White.copy(alpha = 0.1f)
+                ),
+                border = FilterChipDefaults.filterChipBorder(
+                    enabled = true,
+                    selected = selectedLanguage == language,
+                    borderColor = Color.White.copy(alpha = 0.3f),
+                    selectedBorderColor = TrustiPayTertiary
+                )
+            )
         }
     }
 }

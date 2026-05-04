@@ -19,8 +19,10 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -32,6 +34,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import app.trustipay.online.domain.OnlineTransactionState
+import app.trustipay.online.ui.HomeViewModel
 import app.trustipay.ui.theme.*
 
 data class PaymentDraft(
@@ -47,56 +52,100 @@ data class PaymentDraft(
 fun HomeScreen(
     modifier: Modifier = Modifier,
     voiceDraft: PaymentDraft? = null,
-    onVoiceClick: () -> Unit = {}
+    onVoiceClick: () -> Unit = {},
+    homeViewModel: HomeViewModel = viewModel(),
 ) {
-    Box(modifier = modifier.fillMaxSize()) {
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
-        ) {
-            item {
-                HomeHeader()
+    val uiState by homeViewModel.uiState.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(uiState.sendMoneyState) {
+        when (val state = uiState.sendMoneyState) {
+            is OnlineTransactionState.Confirmed -> {
+                snackbarHostState.showSnackbar("Payment sent! ID: ${state.transactionId.takeLast(8)}")
+                homeViewModel.resetSendState()
             }
-            item {
-                BalanceCard()
+            is OnlineTransactionState.Failed -> {
+                snackbarHostState.showSnackbar("Error: ${state.message}")
+                homeViewModel.resetSendState()
             }
-            item {
-                QuickActions(onVoiceClick = onVoiceClick)
+            else -> {}
+        }
+    }
+
+    Scaffold(
+        modifier = modifier,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { scaffoldPadding ->
+        Box(modifier = Modifier.fillMaxSize().padding(scaffoldPadding)) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                item {
+                    HomeHeader(displayName = uiState.displayName)
+                }
+                item {
+                    BalanceCard(
+                        balanceMinor = uiState.balanceMinor,
+                        currency = uiState.currency,
+                        accountNumber = uiState.accountNumber,
+                        isLoading = uiState.isLoadingBalance,
+                    )
+                }
+                item {
+                    QuickActions(onVoiceClick = onVoiceClick)
+                }
+                item {
+                    SendMoneyForm(
+                        voiceDraft = voiceDraft,
+                        isSending = uiState.sendMoneyState is OnlineTransactionState.Submitting,
+                        onSubmit = { recipient, amountMinor, note ->
+                            homeViewModel.submitPayment(recipient, amountMinor, note)
+                        },
+                    )
+                }
+                item {
+                    Text(
+                        text = "Recent Transactions",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = TrustiPayPrimary
+                    )
+                }
+                if (uiState.recentTransactions.isEmpty() && !uiState.isLoadingBalance) {
+                    item {
+                        Text(
+                            text = "No transactions yet",
+                            color = Color.Gray,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                } else {
+                    items(uiState.recentTransactions) { transaction ->
+                        TransactionItem(transaction)
+                    }
+                }
+                item { Spacer(Modifier.height(80.dp)) }
             }
-            item {
-                SendMoneyForm(voiceDraft = voiceDraft)
-            }
-            item {
-                Text(
-                    text = "Recent Transactions",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = TrustiPayPrimary
+
+            FloatingActionButton(
+                onClick = onVoiceClick,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 32.dp)
+                    .size(72.dp),
+                containerColor = TrustiPayPrimary,
+                contentColor = Color.White,
+                shape = CircleShape
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Mic,
+                    contentDescription = "Voice Assistant",
+                    modifier = Modifier.size(36.dp)
                 )
             }
-            items(recentTransactions) { transaction ->
-                TransactionItem(transaction)
-            }
-        }
-
-        // Voice Assistant FAB
-        FloatingActionButton(
-            onClick = onVoiceClick,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 32.dp)
-                .size(72.dp),
-            containerColor = TrustiPayPrimary,
-            contentColor = Color.White,
-            shape = CircleShape
-        ) {
-            Icon(
-                imageVector = Icons.Default.Mic,
-                contentDescription = "Voice Assistant",
-                modifier = Modifier.size(36.dp)
-            )
         }
     }
 }
@@ -104,6 +153,8 @@ fun HomeScreen(
 @Composable
 private fun SendMoneyForm(
     voiceDraft: PaymentDraft?,
+    isSending: Boolean,
+    onSubmit: (recipient: String, amountMinor: Long, note: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var recipient by rememberSaveable { mutableStateOf("") }
@@ -127,6 +178,7 @@ private fun SendMoneyForm(
     }
 
     val parsedAmount = amount.parseAmountInput()
+    val amountMinor = ((parsedAmount ?: 0.0) * 100).toLong()
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -150,27 +202,20 @@ private fun SendMoneyForm(
                         color = TrustiPayPrimary
                     )
                     Text(
-                        text = "From TrustiPay Savings **** 4582",
+                        text = "Online transfer",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray
                     )
                 }
                 if (filledFromVoice) {
-                    AssistChip(
-                        onClick = {},
-                        label = { Text("Voice filled") }
-                    )
+                    AssistChip(onClick = {}, label = { Text("Voice filled") })
                 }
             }
 
             OutlinedTextField(
                 value = recipient,
-                onValueChange = {
-                    recipient = it
-                    filledFromVoice = false
-                    statusMessage = null
-                },
-                label = { Text("Recipient") },
+                onValueChange = { recipient = it; filledFromVoice = false; statusMessage = null },
+                label = { Text("Recipient (phone or account)") },
                 leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                 singleLine = true,
                 isError = statusIsError && recipient.isBlank(),
@@ -179,11 +224,7 @@ private fun SendMoneyForm(
 
             OutlinedTextField(
                 value = amount,
-                onValueChange = {
-                    amount = it.filterAmountInput()
-                    filledFromVoice = false
-                    statusMessage = null
-                },
+                onValueChange = { amount = it.filterAmountInput(); filledFromVoice = false; statusMessage = null },
                 label = { Text("Amount") },
                 prefix = { Text("Rs.") },
                 leadingIcon = { Icon(Icons.Default.AttachMoney, contentDescription = null) },
@@ -195,11 +236,7 @@ private fun SendMoneyForm(
 
             OutlinedTextField(
                 value = note,
-                onValueChange = {
-                    note = it
-                    filledFromVoice = false
-                    statusMessage = null
-                },
+                onValueChange = { note = it; filledFromVoice = false; statusMessage = null },
                 label = { Text("Reason or note") },
                 minLines = 2,
                 maxLines = 3,
@@ -212,16 +249,10 @@ private fun SendMoneyForm(
             ) {
                 OutlinedButton(
                     onClick = {
-                        recipient = ""
-                        amount = ""
-                        note = ""
-                        filledFromVoice = false
-                        statusMessage = null
-                        statusIsError = false
+                        recipient = ""; amount = ""; note = ""
+                        filledFromVoice = false; statusMessage = null; statusIsError = false
                     },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
+                    modifier = Modifier.weight(1f).height(48.dp)
                 ) {
                     Icon(Icons.Default.Clear, contentDescription = null)
                     Spacer(modifier = Modifier.size(8.dp))
@@ -231,30 +262,23 @@ private fun SendMoneyForm(
                 Button(
                     onClick = {
                         val cleanRecipient = recipient.trim()
-                        val cleanAmount = amount.trim()
                         when {
-                            cleanRecipient.isBlank() -> {
-                                statusIsError = true
-                                statusMessage = "Enter the recipient name."
-                            }
-                            parsedAmount == null || parsedAmount <= 0.0 -> {
-                                statusIsError = true
-                                statusMessage = "Enter a valid amount."
-                            }
-                            else -> {
-                                statusIsError = false
-                                statusMessage = "Draft ready: Rs. $cleanAmount to $cleanRecipient."
-                            }
+                            cleanRecipient.isBlank() -> { statusIsError = true; statusMessage = "Enter the recipient." }
+                            parsedAmount == null || parsedAmount <= 0.0 -> { statusIsError = true; statusMessage = "Enter a valid amount." }
+                            else -> { statusIsError = false; statusMessage = null; onSubmit(cleanRecipient, amountMinor, note.trim()) }
                         }
                     },
+                    enabled = !isSending,
                     colors = ButtonDefaults.buttonColors(containerColor = TrustiPayTertiary),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
+                    modifier = Modifier.weight(1f).height(48.dp)
                 ) {
-                    Icon(Icons.Default.Send, contentDescription = null)
-                    Spacer(modifier = Modifier.size(8.dp))
-                    Text("Review")
+                    if (isSending) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White)
+                    } else {
+                        Icon(Icons.Default.Send, contentDescription = null)
+                        Spacer(modifier = Modifier.size(8.dp))
+                        Text("Send")
+                    }
                 }
             }
 
@@ -270,7 +294,7 @@ private fun SendMoneyForm(
 }
 
 @Composable
-fun HomeHeader() {
+fun HomeHeader(displayName: String = "") {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -283,14 +307,14 @@ fun HomeHeader() {
                 color = TrustiPaySecondary
             )
             Text(
-                text = "Saman Kumara",
+                text = displayName.ifBlank { "Welcome" },
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = TrustiPayPrimary
             )
         }
         IconButton(
-            onClick = { /* TODO */ },
+            onClick = { },
             modifier = Modifier.background(Color.White, CircleShape)
         ) {
             Icon(Icons.Default.Notifications, contentDescription = "Notifications", tint = TrustiPayPrimary)
@@ -299,63 +323,54 @@ fun HomeHeader() {
 }
 
 @Composable
-fun BalanceCard() {
+fun BalanceCard(
+    balanceMinor: Long = 0L,
+    currency: String = "LKR",
+    accountNumber: String = "",
+    isLoading: Boolean = false,
+) {
+    val displayBalance = if (isLoading) "Loading…" else {
+        val rupees = balanceMinor / 100.0
+        "Rs. %,.2f".format(rupees)
+    }
+    val maskedAccount = if (accountNumber.length >= 4) "**** ${accountNumber.takeLast(4)}" else accountNumber
+
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(180.dp),
+        modifier = Modifier.fillMaxWidth().height(180.dp),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = TrustiPayPrimary)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(TrustiPayPrimary, TrustiPaySecondary)
-                    )
-                )
+                .background(Brush.linearGradient(colors = listOf(TrustiPayPrimary, TrustiPaySecondary)))
                 .padding(24.dp)
         ) {
             Column(modifier = Modifier.align(Alignment.TopStart)) {
+                Text(text = "Total Balance", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodyMedium)
+                Text(text = displayBalance, color = Color.White, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+            }
+            if (maskedAccount.isNotBlank()) {
                 Text(
-                    text = "Total Balance",
-                    color = Color.White.copy(alpha = 0.7f),
+                    text = maskedAccount,
+                    color = Color.White.copy(alpha = 0.5f),
+                    modifier = Modifier.align(Alignment.BottomStart),
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Text(
-                    text = "Rs. 45,250.00",
-                    color = Color.White,
-                    style = MaterialTheme.typography.headlineLarge,
-                    fontWeight = FontWeight.Bold
-                )
             }
-            Text(
-                text = "**** **** **** 4582",
-                color = Color.White.copy(alpha = 0.5f),
-                modifier = Modifier.align(Alignment.BottomStart),
-                style = MaterialTheme.typography.bodyMedium
-            )
             Icon(
                 imageVector = Icons.Default.QrCodeScanner,
                 contentDescription = "Scan",
                 tint = Color.White,
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size(32.dp)
+                modifier = Modifier.align(Alignment.BottomEnd).size(32.dp)
             )
         }
     }
 }
 
 @Composable
-fun QuickActions(
-    onVoiceClick: () -> Unit = {},
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
+fun QuickActions(onVoiceClick: () -> Unit = {}) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         ActionItem(Icons.Default.QrCodeScanner, "Pay")
         ActionItem(Icons.Default.Mic, "Voice Pay", onClick = onVoiceClick)
         ActionItem(Icons.Default.Notifications, "Bills")
@@ -375,10 +390,7 @@ fun ActionItem(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Box(
-            modifier = Modifier
-                .size(60.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color.White),
+            modifier = Modifier.size(60.dp).clip(RoundedCornerShape(16.dp)).background(Color.White),
             contentAlignment = Alignment.Center
         ) {
             Icon(icon, contentDescription = label, tint = TrustiPaySecondary)
@@ -395,21 +407,17 @@ fun TransactionItem(transaction: Transaction) {
         shape = RoundedCornerShape(16.dp)
     ) {
         Row(
-            modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
+            modifier = Modifier.padding(16.dp).fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(TrustiPayBackground, CircleShape),
+                    modifier = Modifier.size(48.dp).background(TrustiPayBackground, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = transaction.name.first().toString(),
+                        text = transaction.name.firstOrNull()?.toString() ?: "?",
                         color = TrustiPayPrimary,
                         fontWeight = FontWeight.Bold
                     )
@@ -440,13 +448,6 @@ private fun String.compactForStatus(): String {
     val clean = trim()
     return if (clean.length <= 72) clean else "${clean.take(69)}..."
 }
-
-val recentTransactions = listOf(
-    Transaction("Food City", "2,450.00", "Today, 10:30 AM", false),
-    Transaction("Salary", "120,000.00", "28 Oct, 09:00 AM", true),
-    Transaction("Dialog Axiata", "1,500.00", "27 Oct, 04:15 PM", false),
-    Transaction("Keells Super", "3,200.00", "25 Oct, 06:20 PM", false)
-)
 
 @Preview(showBackground = true)
 @Composable

@@ -7,6 +7,8 @@ import java.math.BigDecimal
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,18 +98,22 @@ class VoiceAssistantViewModel(
                 it.copy(
                     modelState = VoiceModelState.Downloading,
                     captureState = VoiceCaptureState.Idle,
-                    statusMessage = "Downloading $modelName for on-device Sinhala and English transcription...",
+                    statusMessage = "Downloading models for on-device transcription...",
                     errorMessage = null,
                     modelStorageDirectory = transcriber.modelStorageDirectory(),
                 )
             }
 
             try {
-                transcriber.downloadModel()
+                val whisperJob = async { transcriber.downloadModel() }
+                val voskJob = async { transcriber.downloadVoskModel() }
+                
+                awaitAll(whisperJob, voskJob)
+                
                 updateState {
                     it.copy(
                         modelState = VoiceModelState.Downloaded,
-                        statusMessage = "$modelName downloaded. Initializing local transcription...",
+                        statusMessage = "Models downloaded. Initializing local transcription...",
                         errorMessage = null,
                     )
                 }
@@ -276,6 +282,10 @@ class VoiceAssistantViewModel(
         recorder.stop()
     }
 
+    fun setLanguage(language: AssistantLanguage) {
+        updateState { it.copy(selectedLanguage = language) }
+    }
+
     fun cancelActiveWork() {
         sessionId += 1
         recorder.stop()
@@ -384,7 +394,12 @@ class VoiceAssistantViewModel(
             }
 
             try {
-                val text = transcriber.transcribeLive(speechSnapshot) { partialText ->
+                val prompt = when (_uiState.value.selectedLanguage) {
+                    AssistantLanguage.Sinhala -> LocalWhisperTranscriber.SinhalaPrompt
+                    AssistantLanguage.English -> LocalWhisperTranscriber.EnglishPrompt
+                    AssistantLanguage.Auto -> LocalWhisperTranscriber.MultilingualPrompt
+                }
+                val text = transcriber.transcribeLive(speechSnapshot, prompt) { partialText ->
                     updateTranscriptIfActive(activeSession, partialText)
                 }
                 if (text.isNotBlank()) {
@@ -444,7 +459,12 @@ class VoiceAssistantViewModel(
 
         try {
             val resultText = try {
-                transcriber.transcribe(audio) { partialText ->
+                val prompt = when (_uiState.value.selectedLanguage) {
+                    AssistantLanguage.Sinhala -> LocalWhisperTranscriber.SinhalaPrompt
+                    AssistantLanguage.English -> LocalWhisperTranscriber.EnglishPrompt
+                    AssistantLanguage.Auto -> LocalWhisperTranscriber.MultilingualPrompt
+                }
+                transcriber.transcribe(audio, prompt) { partialText ->
                     updateTranscriptIfActive(activeSession, partialText)
                 }
             } catch (throwable: CancellationException) {

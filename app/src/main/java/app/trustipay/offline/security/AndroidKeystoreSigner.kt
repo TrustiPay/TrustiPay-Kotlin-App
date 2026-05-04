@@ -46,6 +46,12 @@ class AndroidKeystoreSigner(
         generator.generateKeyPair()
     }
 
+    val publicKeyBytes: ByteArray
+        get() {
+            ensureKeyPair()
+            return publicKey.encoded
+        }
+
     private val privateKey: PrivateKey
         get() = (keyStore.getEntry(keyAlias, null) as KeyStore.PrivateKeyEntry).privateKey
 

@@ -17,8 +17,12 @@ class DeviceKeyManager(
     fun sign(payload: ByteArray): ByteArray =
         java.util.Base64.getUrlDecoder().decode(signer.sign(payload))
 
+    fun signAsBase64Url(payload: ByteArray): String = signer.sign(payload)
+
     fun getPublicKeyId(): String {
         signer.ensureKeyPair()
         return signer.publicKeyId
     }
+
+    fun getPublicKeyBytes(): ByteArray = signer.publicKeyBytes
 }

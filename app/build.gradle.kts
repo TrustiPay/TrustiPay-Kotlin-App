@@ -36,6 +36,8 @@ android {
         buildConfigField("boolean", "TRANSPORT_NFC_ENABLED", "true")
         buildConfigField("boolean", "OFFLINE_SETTLEMENT_SHADOW_MODE", "true")
         buildConfigField("boolean", "OFFLINE_SETTLEMENT_LIVE_MODE", "false")
+        buildConfigField("String", "TRUSTIPAY_API_BASE_URL", "http://10.0.2.2:8080/api/v1/".asBuildConfigString())
+        buildConfigField("boolean", "TRUSTIPAY_API_LIVE_MODE", "false")
     }
 
     buildTypes {
@@ -79,6 +81,19 @@ dependencies {
     implementation(libs.cactus)
     implementation(libs.litertlm.android)
     implementation(libs.vosk.android)
+    implementation(libs.retrofit.core)
+    implementation(libs.retrofit.converter.moshi)
+    implementation(libs.okhttp.core)
+    implementation(libs.okhttp.logging)
+    implementation(libs.moshi.kotlin)
+    implementation(libs.work.runtime.ktx)
+    implementation(libs.security.crypto)
+    implementation(libs.zxing.core)
+    implementation(libs.camerax.core)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.view)
+    implementation(libs.mlkit.barcode)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

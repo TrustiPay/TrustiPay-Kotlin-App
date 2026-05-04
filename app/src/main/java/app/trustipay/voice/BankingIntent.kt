@@ -168,29 +168,29 @@ internal object BankingIntentToolCallParser {
 }
 
 class TrustiPayIntentToolSet : ToolSet {
-    @Tool(description = "Create a draft send-money intent. This does not transfer money.")
+    @Tool(description = "Create a draft send-money intent (මුදල් යැවීමේ කෙටුම්පතක් සාදන්න). This does not transfer money.")
     fun sendMoney(
-        @ToolParam(description = "Recipient name, phone number, account alias, or contact.") to: String,
-        @ToolParam(description = "Amount to send in Sri Lankan rupees. Must be greater than zero.") amount: Double,
-        @ToolParam(description = "Optional transfer reason, note, or memo.") reason: String? = null,
+        @ToolParam(description = "Recipient name, phone number, account alias, or contact (ලබන්නාගේ නම හෝ අංකය).") to: String,
+        @ToolParam(description = "Amount to send in Sri Lankan rupees (රුපියල් ප්‍රමාණය). Must be greater than zero.") amount: Double,
+        @ToolParam(description = "Optional transfer reason, note, or memo (සටහන).") reason: String? = null,
     ): Map<String, Any?> =
         mapOf("request" to BankingIntentType.SendMoney.wireValue, "to" to to, "amount" to amount, "reason" to reason)
 
-    @Tool(description = "Create a draft balance-check intent.")
+    @Tool(description = "Create a draft balance-check intent (ගිණුම් ශේෂය පරීක්ෂා කිරීම).")
     fun checkBalance(): Map<String, Any?> =
         mapOf("request" to BankingIntentType.CheckBalance.wireValue)
 
-    @Tool(description = "Create a draft bill-payment intent. This does not pay the bill.")
+    @Tool(description = "Create a draft bill-payment intent (බිල්පත් ගෙවීමේ කෙටුම්පතක් සාදන්න). This does not pay the bill.")
     fun payBill(
-        @ToolParam(description = "Biller, merchant, utility provider, or organization to pay.") to: String,
-        @ToolParam(description = "Bill amount in Sri Lankan rupees. Must be greater than zero.") amount: Double,
-        @ToolParam(description = "Optional bill reference, category, or note.") reason: String? = null,
+        @ToolParam(description = "Biller, merchant, utility provider, or organization to pay (බිල්පත ගෙවිය යුතු ආයතනය).") to: String,
+        @ToolParam(description = "Bill amount in Sri Lankan rupees (රුපියල් ප්‍රමාණය). Must be greater than zero.") amount: Double,
+        @ToolParam(description = "Optional bill reference, category, or note (විමර්ශන අංකය).") reason: String? = null,
     ): Map<String, Any?> =
         mapOf("request" to BankingIntentType.PayBill.wireValue, "to" to to, "amount" to amount, "reason" to reason)
 
-    @Tool(description = "Use when the voice request is unclear or not one of TrustiPay's supported banking intents.")
+    @Tool(description = "Use when the voice request is unclear or not one of TrustiPay's supported banking intents (අපැහැදිලි ඉල්ලීමකි).")
     fun unknownRequest(
-        @ToolParam(description = "Short reason the request is unclear or unsupported.") reason: String? = null,
+        @ToolParam(description = "Short reason the request is unclear or unsupported (හේතුව).") reason: String? = null,
     ): Map<String, Any?> =
         mapOf("request" to BankingIntentType.Unknown.wireValue, "reason" to reason)
 }

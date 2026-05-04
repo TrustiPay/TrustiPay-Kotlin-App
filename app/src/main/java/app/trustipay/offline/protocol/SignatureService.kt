@@ -44,6 +44,21 @@ class PublicKeySignatureVerifier(
     }
 }
 
+class CacheBackedSignatureVerifier(
+    private val cache: app.trustipay.offline.security.PublicKeyCache,
+) : SignatureVerifier {
+    override fun verify(publicKeyId: String, payload: ByteArray, signatureBase64Url: String): Boolean {
+        val publicKey = cache.get(publicKeyId) ?: return false
+        return runCatching {
+            val signatureBytes = Base64.getUrlDecoder().decode(signatureBase64Url)
+            val signature = Signature.getInstance(EcdsaAlgorithm)
+            signature.initVerify(publicKey)
+            signature.update(payload)
+            signature.verify(signatureBytes)
+        }.getOrDefault(false)
+    }
+}
+
 data class GeneratedSigningKey(
     val keyPair: KeyPair,
     val publicKeyId: String,

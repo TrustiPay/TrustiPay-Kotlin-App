@@ -7,6 +7,7 @@ data class VoiceAssistantUiState(
     val isDeviceSupported: Boolean = true,
     val transcript: String = "",
     val languageLabel: String = "Not detected",
+    val selectedLanguage: AssistantLanguage = AssistantLanguage.Auto,
     val statusMessage: String = "Voice model setup is required.",
     val errorMessage: String? = null,
     val modelStorageDirectory: String = "",
@@ -35,6 +36,12 @@ data class VoiceAssistantUiState(
             captureState != VoiceCaptureState.Listening &&
             captureState != VoiceCaptureState.LiveTranscribing &&
             captureState != VoiceCaptureState.Finalizing
+}
+
+enum class AssistantLanguage(val label: String) {
+    Auto("Auto"),
+    Sinhala("Sinhala"),
+    English("English")
 }
 
 enum class VoiceModelState {

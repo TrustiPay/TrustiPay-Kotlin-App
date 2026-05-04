@@ -3,6 +3,8 @@ package app.trustipay.offline.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.trustipay.AppContainer
+import app.trustipay.BuildConfig
 import app.trustipay.offline.OfflineFeatureFlagProvider
 import app.trustipay.offline.data.OfflinePaymentOpenHelper
 import app.trustipay.offline.data.SQLiteOfflinePaymentStore
@@ -13,22 +15,27 @@ import app.trustipay.offline.domain.SecureOfflineIdGenerator
 import app.trustipay.offline.domain.TransactionDirection
 import app.trustipay.offline.domain.TransactionState
 import app.trustipay.offline.domain.TransportType
+import app.trustipay.offline.protocol.CacheBackedSignatureVerifier
 import app.trustipay.offline.protocol.JavaSigningKeyFactory
 import app.trustipay.offline.protocol.MessageHasher
 import app.trustipay.offline.protocol.OfflineTokenFactory
 import app.trustipay.offline.protocol.OfflineTokenWallet
 import app.trustipay.offline.protocol.PaymentProtocolEngine
-import app.trustipay.offline.protocol.PublicKeySignatureVerifier
 import app.trustipay.offline.protocol.PublicKeyTokenIssuerVerifier
 import app.trustipay.offline.protocol.TokenSelectionResult
 import app.trustipay.offline.protocol.TokenValidator
 import app.trustipay.offline.protocol.canonicalBytes
+import app.trustipay.offline.security.AndroidKeystoreSigner
+import app.trustipay.offline.security.DeviceKeyManager
+import app.trustipay.offline.security.PublicKeyCache
 import app.trustipay.offline.sync.SyncRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.security.KeyFactory
+import java.security.spec.X509EncodedKeySpec
 import java.time.Clock
 import java.time.Duration
 
@@ -41,46 +48,58 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
     private val syncRepository = SyncRepository(store, flags, idGenerator, clock)
     private val engine = PaymentProtocolEngine(clock, idGenerator)
 
-    // Demo Keys (In a real app, these would come from Keystore/Secure Element)
-    private val issuer = JavaSigningKeyFactory.generate("issuer-demo-001")
-    private val sender = JavaSigningKeyFactory.generate("sender-demo-001")
-    private val receiver = JavaSigningKeyFactory.generate("receiver-demo-001")
-    private val verifier = PublicKeySignatureVerifier(
-        mapOf(
-            issuer.publicKeyId to issuer.keyPair.public,
-            sender.publicKeyId to sender.keyPair.public,
-            receiver.publicKeyId to receiver.keyPair.public,
+    // Real device key (hardware-backed on API 29+)
+    private val keystoreSigner = AndroidKeystoreSigner()
+    private val deviceKeyManager = DeviceKeyManager(keystoreSigner)
+
+    // Shared public key cache — populated from API token issuance and peer exchanges
+    private val publicKeyCache: PublicKeyCache
+        get() = AppContainer.tokenIssuanceRepository.sharedPublicKeyCache
+
+    private val tokenValidator: TokenValidator by lazy {
+        TokenValidator(
+            PublicKeyTokenIssuerVerifier(CacheBackedSignatureVerifier(publicKeyCache)),
+            clock,
         )
-    )
-    private val tokenValidator = TokenValidator(PublicKeyTokenIssuerVerifier(verifier), clock)
+    }
+
+    // Demo receiver key — represents the other device in same-device demo flow
+    private val demoReceiver = JavaSigningKeyFactory.generate("receiver-demo-001")
+    // Demo issuer key — used only when seeding debug data
+    private val demoIssuer = if (BuildConfig.DEBUG) JavaSigningKeyFactory.generate("issuer-demo-001") else null
 
     private val _uiState = MutableStateFlow(OfflineUiSnapshot(0, 0, 0, null, emptyList(), emptyList()))
     val uiState: StateFlow<OfflineUiSnapshot> = _uiState.asStateFlow()
 
     init {
-        seedDemoDataIfNeeded()
-        refreshSnapshot()
+        viewModelScope.launch(Dispatchers.IO) {
+            keystoreSigner.ensureKeyPair()
+            if (BuildConfig.DEBUG) seedDemoDataIfNeeded()
+            refreshSnapshot()
+        }
     }
 
     private fun seedDemoDataIfNeeded() {
         val existingTokens = store.listTokens()
-        if (existingTokens.isEmpty()) {
-            val tokenFactory = OfflineTokenFactory(idGenerator)
-            val now = clock.instant()
-            val tokens = listOf(100000L, 50000L, 20000L, 10000L, 10000L, 5000L, 2000L, 1000L).map { amount ->
-                tokenFactory.issueToken(
-                    ownerUserId = "user_saman_demo",
-                    ownerDeviceId = "device_sender_demo",
-                    amountMinor = amount,
-                    currency = "LKR",
-                    issuedAtServer = now - Duration.ofHours(1),
-                    expiresAtServer = now + Duration.ofDays(5),
-                    issuerKeyId = issuer.publicKeyId,
-                    issuerSigner = issuer.signer(),
-                )
-            }
-            tokens.forEach(store::upsertToken)
+        if (existingTokens.isNotEmpty()) return
+        val issuer = demoIssuer ?: return
+        val tokenFactory = OfflineTokenFactory(idGenerator)
+        val now = clock.instant()
+        val tokens = listOf(100000L, 50000L, 20000L, 10000L, 10000L, 5000L, 2000L, 1000L).map { amount ->
+            tokenFactory.issueToken(
+                ownerUserId = "user_saman_demo",
+                ownerDeviceId = deviceKeyManager.getPublicKeyId(),
+                amountMinor = amount,
+                currency = "LKR",
+                issuedAtServer = now - Duration.ofHours(1),
+                expiresAtServer = now + Duration.ofDays(5),
+                issuerKeyId = issuer.publicKeyId,
+                issuerSigner = issuer.signer(),
+            )
         }
+        // Cache demo issuer public key so validator can verify demo tokens
+        publicKeyCache.put(issuer.publicKeyId, issuer.keyPair.public)
+        tokens.forEach(store::upsertToken)
     }
 
     fun refreshSnapshot(lastMessage: String? = null) {
@@ -89,9 +108,8 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
             val tokens = store.listTokens()
             val transactions = store.listTransactions()
             val wallet = OfflineTokenWallet(tokens)
-
             val pendingSyncCount = transactions.count { it.state in PendingStates }
-            
+
             _uiState.value = OfflineUiSnapshot(
                 balanceMinor = wallet.spendableBalance("LKR", now),
                 tokenCount = tokens.count { it.isSpendableAt(now) },
@@ -121,6 +139,23 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun requestFreshTokens() {
+        viewModelScope.launch(Dispatchers.IO) {
+            refreshSnapshot("Requesting tokens from server…")
+            val result = AppContainer.tokenIssuanceRepository.requestAndStoreTokens(
+                requestedAmounts = listOf(100000L, 50000L, 20000L, 10000L, 5000L, 2000L, 1000L),
+                currency = "LKR",
+            )
+            val message = when (result) {
+                is app.trustipay.api.ApiResult.Success -> "Received ${result.data} tokens from server."
+                is app.trustipay.api.ApiResult.NetworkError -> "Network error requesting tokens."
+                is app.trustipay.api.ApiResult.HttpError -> "Server error: ${result.message}"
+                app.trustipay.api.ApiResult.AuthError -> "Not authenticated."
+            }
+            refreshSnapshot(message)
+        }
+    }
+
     fun runQrPayment(amountText: String, receiverAlias: String, description: String) {
         viewModelScope.launch(Dispatchers.IO) {
             if (!flags.offlinePaymentsEnabled) {
@@ -145,39 +180,45 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
 
             try {
                 wallet.reserveTokens(selected.tokens.map { it.tokenId })
-                
+
+                // Cache the demo receiver's public key so verification works
+                publicKeyCache.put(demoReceiver.publicKeyId, demoReceiver.keyPair.public)
+                // Cache our own signing key's public key
+                val senderKeyBytes = deviceKeyManager.getPublicKeyBytes()
+                val senderPublicKey = KeyFactory.getInstance("EC")
+                    .generatePublic(X509EncodedKeySpec(senderKeyBytes))
+                publicKeyCache.put(deviceKeyManager.getPublicKeyId(), senderPublicKey)
+
                 val request = engine.createPaymentRequest(
-                    receiverUserAlias = receiverAlias.ifBlank { "Offline receiver" },
-                    receiverDeviceId = "device_receiver_demo",
-                    receiverPublicKeyId = receiver.publicKeyId,
+                    receiverUserAlias = receiverAlias.ifBlank { "Offline Receiver" },
+                    receiverDeviceId = demoReceiver.publicKeyId,
+                    receiverPublicKeyId = demoReceiver.publicKeyId,
                     money = money,
                     description = description,
                     supportedTransports = listOf(TransportType.QR),
-                    signer = receiver.signer(),
+                    signer = demoReceiver.signer(),
                     validFor = Duration.ofMinutes(5),
                 )
 
                 val offer = engine.createPaymentOffer(
                     request = request,
-                    senderUserAlias = "Saman",
-                    senderDeviceId = "device_sender_demo",
-                    senderPublicKeyId = sender.publicKeyId,
+                    senderUserAlias = "Me",
+                    senderDeviceId = deviceKeyManager.getPublicKeyId(),
+                    senderPublicKeyId = deviceKeyManager.getPublicKeyId(),
                     selectedTokens = selected.tokens,
-                    signer = sender.signer(),
+                    signer = keystoreSigner,
                 )
 
                 val receipt = engine.createPaymentReceipt(
                     request = request,
                     offer = offer,
-                    receiverDeviceId = "device_receiver_demo",
-                    signer = receiver.signer(),
+                    receiverDeviceId = demoReceiver.publicKeyId,
+                    signer = demoReceiver.signer(),
                 )
 
                 wallet.markSpentPendingSync(selected.tokens.map { it.tokenId })
-                
-                // Persist token state changes
                 wallet.allTokens().forEach(store::upsertToken)
-                
+
                 selected.tokens.forEach { token ->
                     store.recordKnownSpentToken(
                         KnownSpentToken(
@@ -211,10 +252,10 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
                     createdLocalAt = now,
                     updatedLocalAt = now,
                 )
-                
+
                 syncRepository.queueAcceptedTransaction(transaction)
                 refreshSnapshot("Payment accepted offline.")
-                
+
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -226,7 +267,7 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
 
     fun syncNow() {
         viewModelScope.launch(Dispatchers.IO) {
-            val summary = syncRepository.processShadowSync()
+            val summary = syncRepository.processSync()
             refreshSnapshot(summary.message)
         }
     }

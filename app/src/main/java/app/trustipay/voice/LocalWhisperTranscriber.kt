@@ -12,6 +12,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.Closeable
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.zip.ZipInputStream
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -24,14 +29,85 @@ class LocalWhisperTranscriber(
     fun isModelDownloaded(): Boolean =
         CactusModelManager.isModelDownloaded(modelSlug)
 
-    fun deleteModel(): Boolean =
-        CactusModelManager.deleteModel(modelSlug)
+    fun isVoskModelDownloaded(): Boolean {
+        val voskDir = File(modelStorageDirectory(), VoskModelFolder)
+        return voskDir.exists() && voskDir.isDirectory && voskDir.listFiles()?.isNotEmpty() == true
+    }
+
+    fun deleteModel(): Boolean {
+        val whisperDeleted = CactusModelManager.deleteModel(modelSlug)
+        val voskDir = File(modelStorageDirectory(), VoskModelFolder)
+        val voskDeleted = if (voskDir.exists()) voskDir.deleteRecursively() else false
+        return whisperDeleted || voskDeleted
+    }
 
     fun modelStorageDirectory(): String =
         CactusModelManager.getModelsDirectory()
 
     suspend fun downloadModel() = withContext(Dispatchers.IO) {
         stt.downloadModel(modelSlug)
+    }
+
+    suspend fun downloadVoskModel() = withContext(Dispatchers.IO) {
+        if (isVoskModelDownloaded()) return@withContext
+
+        val modelsDir = File(modelStorageDirectory())
+        if (!modelsDir.exists()) modelsDir.mkdirs()
+
+        val tempZip = File(modelsDir, "vosk_tmp.zip")
+        try {
+            Log.d("VoskDownloader", "Downloading Vosk model from $VoskModelUrl")
+            val connection = URL(VoskModelUrl).openConnection() as HttpURLConnection
+            connection.connect()
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                error("Failed to download Vosk model: ${connection.responseCode}")
+            }
+
+            connection.inputStream.use { input ->
+                tempZip.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            Log.d("VoskDownloader", "Extracting Vosk model...")
+            extractZipTo(tempZip, modelsDir)
+            
+            // The zip extracts to a folder like "vosk-model-small-en-us-0.15"
+            // Find it and rename to "vosk-model"
+            val extractedDir = modelsDir.listFiles { f -> f.isDirectory && f.name.contains("vosk-model") && f.name != VoskModelFolder }
+                ?.firstOrNull()
+            
+            if (extractedDir != null) {
+                val targetDir = File(modelsDir, VoskModelFolder)
+                if (targetDir.exists()) targetDir.deleteRecursively()
+                extractedDir.renameTo(targetDir)
+                Log.d("VoskDownloader", "Vosk model setup complete at ${targetDir.absolutePath}")
+            } else {
+                error("Vosk model extraction failed: could not find extracted directory.")
+            }
+
+        } finally {
+            if (tempZip.exists()) tempZip.delete()
+        }
+    }
+
+    private fun extractZipTo(zipFile: File, targetDir: File) {
+        ZipInputStream(zipFile.inputStream()).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                val newFile = File(targetDir, entry.name)
+                if (entry.isDirectory) {
+                    newFile.mkdirs()
+                } else {
+                    newFile.parentFile?.mkdirs()
+                    FileOutputStream(newFile).use { fos ->
+                        zis.copyTo(fos)
+                    }
+                }
+                zis.closeEntry()
+                entry = zis.nextEntry
+            }
+        }
     }
 
     suspend fun initializeDownloadedModel() = withContext(Dispatchers.IO) {
@@ -43,6 +119,7 @@ class LocalWhisperTranscriber(
 
     suspend fun transcribeLive(
         audioBuffer: ByteArray,
+        prompt: String = MultilingualPrompt,
         onPartialText: suspend (String) -> Unit = {},
     ): String = coroutineScope {
         val nativeSupport = NativeTranscriptionCompatibility.check()
@@ -57,7 +134,7 @@ class LocalWhisperTranscriber(
 
             val result = withContext(Dispatchers.IO) {
                 stt.transcribe(
-                    prompt = MultilingualPrompt,
+                    prompt = prompt,
                     params = CactusTranscriptionParams(model = modelSlug),
                     mode = TranscriptionMode.LOCAL,
                     audioBuffer = speechAudio,
@@ -96,7 +173,9 @@ class LocalWhisperTranscriber(
         val normalized = cleaned.lowercase().replace(Regex("[.\\s/_-]"), "")
         val knownHallucinations = setOf(
             "(", "[", "]", "...", "thankyou", "subtitles", "you", "thanksforwatching", 
-            "hello", "insin", "insinhala", "inthesame", "thesamefor", "divdivdiv", "div", "(c)", "c", ""
+            "hello", "insin", "insinhala", "inthesame", "thesamefor", "divdivdiv", "div", "(c)", "c", "",
+            "සිංහල", "sinhala", "english", "thankyouforwatching", "please", "likeandsubscribe",
+            "ස්තූතියි", "උපසිරැසි", "ස්තුතියි", "බොහොම ස්තූතියි"
         )
         if (knownHallucinations.contains(normalized) ||
             cleaned.all { it == '.' || it == ' ' || it == '/' || it == '(' || it == ')' } ||
@@ -149,14 +228,19 @@ class LocalWhisperTranscriber(
 
     suspend fun transcribe(
         audioBuffer: ByteArray,
+        prompt: String = MultilingualPrompt,
         onPartialText: suspend (String) -> Unit = {},
-    ): String = transcribeLive(audioBuffer, onPartialText)
+    ): String = transcribeLive(audioBuffer, prompt, onPartialText)
 
     override fun close() {
         stt.reset()
     }
 
-    private companion object {
-        const val MultilingualPrompt = "<|startoftranscript|><|transcribe|><|notimestamps|>"
+    companion object {
+        const val MultilingualPrompt = "<|startoftranscript|><|transcribe|><|notimestamps|>Sinhala: මට සල්ලි යවන්න ඕනේ. English: I want to send money to Saman. TrustiPay."
+        const val SinhalaPrompt = "<|startoftranscript|><|si|><|transcribe|><|notimestamps|>මට සල්ලි යවන්න ඕනේ."
+        const val EnglishPrompt = "<|startoftranscript|><|en|><|transcribe|><|notimestamps|>I want to send money."
+        const val VoskModelUrl = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+        const val VoskModelFolder = "vosk-model"
     }
 }

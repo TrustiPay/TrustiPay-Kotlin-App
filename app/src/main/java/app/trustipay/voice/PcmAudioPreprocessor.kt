@@ -34,11 +34,11 @@ object PcmAudioPreprocessor {
         if (frameRms.isEmpty()) return ByteArray(0)
 
         val maxRms = frameRms.maxOrNull() ?: 0.0
-        if (maxRms < 420.0) return ByteArray(0)
+        if (maxRms < 300.0) return ByteArray(0)
 
         val sortedRms = frameRms.sorted()
         val noiseFloor = sortedRms[(sortedRms.size * 0.25).toInt().coerceIn(0, sortedRms.lastIndex)]
-        val speechThreshold = maxOf(360.0, noiseFloor * 2.2, maxRms * 0.10)
+        val speechThreshold = maxOf(250.0, noiseFloor * 2.1, maxRms * 0.08)
 
         val firstSpeechFrame = frameRms.indexOfFirst { it >= speechThreshold }
         val lastSpeechFrame = frameRms.indexOfLast { it >= speechThreshold }
