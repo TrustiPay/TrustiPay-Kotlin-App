@@ -4,13 +4,14 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.services)
 }
 
 fun String.asBuildConfigString(): String =
     "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 val trustiPaySttModel = providers.gradleProperty("trustiPaySttModel")
-    .orElse("whisper-small")
+    .orElse("whisper-base")
     .get()
 
 android {
@@ -34,10 +35,11 @@ android {
         buildConfigField("boolean", "TRANSPORT_BLE_ENABLED", "true")
         buildConfigField("boolean", "TRANSPORT_WIFI_DIRECT_ENABLED", "true")
         buildConfigField("boolean", "TRANSPORT_NFC_ENABLED", "true")
-        buildConfigField("boolean", "OFFLINE_SETTLEMENT_SHADOW_MODE", "true")
-        buildConfigField("boolean", "OFFLINE_SETTLEMENT_LIVE_MODE", "false")
-        buildConfigField("String", "TRUSTIPAY_API_BASE_URL", "http://10.0.2.2:8080/api/v1/".asBuildConfigString())
-        buildConfigField("boolean", "TRUSTIPAY_API_LIVE_MODE", "false")
+        buildConfigField("boolean", "OFFLINE_SETTLEMENT_SHADOW_MODE", "false")
+        buildConfigField("boolean", "OFFLINE_SETTLEMENT_LIVE_MODE", "true")
+        buildConfigField("String", "TRUSTIPAY_API_BASE_URL", "https://api.trustipay.online/api/v1/".asBuildConfigString())
+        buildConfigField("String", "TRUSTIPAY_AUTH_BASE_URL", "https://auth.trustipay.online/api/v1/".asBuildConfigString())
+        buildConfigField("boolean", "TRUSTIPAY_API_LIVE_MODE", "true")
     }
 
     buildTypes {
@@ -94,6 +96,9 @@ dependencies {
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
     implementation(libs.mlkit.barcode)
+    implementation(libs.kotlinx.coroutines.play.services)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.firestore)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

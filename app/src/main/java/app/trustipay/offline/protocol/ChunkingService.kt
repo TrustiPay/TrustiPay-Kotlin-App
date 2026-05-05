@@ -75,8 +75,3 @@ class ChunkingService(
         const val PayloadEncoding = "CANONICAL_JSON_BASE64URL"
     }
 }
-
-sealed class ChunkReassemblyResult {
-    data class Success(val payload: ByteArray) : ChunkReassemblyResult()
-    data class Failure(val reason: String) : ChunkReassemblyResult()
-}

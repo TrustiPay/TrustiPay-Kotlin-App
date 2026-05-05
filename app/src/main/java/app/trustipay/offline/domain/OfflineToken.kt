@@ -44,8 +44,10 @@ data class OfflineToken(
         tokenId = tokenId,
         amountMinor = amountMinor,
         currency = currency,
+        issuedAtServer = issuedAtServer,
         expiresAtServer = expiresAtServer,
         issuerKeyId = issuerKeyId,
+        nonce = nonce,
         serverSignature = serverSignature,
         canonicalPayloadBase64Url = java.util.Base64.getUrlEncoder()
             .withoutPadding()
@@ -57,8 +59,10 @@ data class PaymentOfferToken(
     val tokenId: String,
     val amountMinor: Long,
     val currency: String,
+    val issuedAtServer: Instant,
     val expiresAtServer: Instant,
     val issuerKeyId: String,
+    val nonce: String,
     val serverSignature: String,
     val canonicalPayloadBase64Url: String,
 )

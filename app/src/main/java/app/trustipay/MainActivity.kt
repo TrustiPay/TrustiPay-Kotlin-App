@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -49,6 +50,7 @@ import app.trustipay.offline.OfflineFeatureFlagProvider
 import app.trustipay.offline.sync.OfflineSyncWorker
 import app.trustipay.offline.ui.OfflinePaymentsScreen
 import app.trustipay.online.ui.HomeViewModel
+import app.trustipay.analytics.ui.AnalyticsScreen
 import app.trustipay.ui.screens.HomeScreen
 import app.trustipay.ui.screens.PaymentDraft
 import app.trustipay.ui.screens.VoiceAssistantScreen
@@ -195,6 +197,9 @@ private fun MainApp(
                         onVoiceClick = { showVoiceAssistant = true },
                         homeViewModel = homeViewModel,
                     )
+                    AppDestinations.ANALYTICS -> AnalyticsScreen(
+                        modifier = Modifier.padding(innerPadding)
+                    )
                     AppDestinations.OFFLINE -> OfflinePaymentsScreen(
                         modifier = Modifier.padding(innerPadding),
                         voiceDraft = latestVoiceDraft
@@ -261,6 +266,7 @@ enum class AppDestinations(
     val requiresOfflineFlag: Boolean = false,
 ) {
     HOME("Home", Icons.Default.Home),
+    ANALYTICS("Analytics", Icons.Default.BarChart),
     OFFLINE("Offline", Icons.Default.QrCodeScanner, requiresOfflineFlag = true),
     HISTORY("History", Icons.Default.History),
     PROFILE("Profile", Icons.Default.Person),

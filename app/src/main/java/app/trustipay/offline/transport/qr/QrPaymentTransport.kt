@@ -20,6 +20,7 @@ class QrPaymentTransport(
     override val type: TransportType = TransportType.QR
 
     private val _incomingMessages = MutableSharedFlow<TransportEnvelope>(extraBufferCapacity = 64)
+    private val _incomingIOUs = MutableSharedFlow<app.trustipay.offline.domain.OfflineIOU>(extraBufferCapacity = 64)
     private val _outgoingBitmaps = MutableStateFlow<List<Bitmap>>(emptyList())
     private val _currentBitmapIndex = MutableStateFlow(0)
 
@@ -35,16 +36,28 @@ class QrPaymentTransport(
     }
 
     override suspend fun send(peerId: String, envelope: TransportEnvelope): Result<Unit> {
+        return Result.success(Unit) // Deprecated in favor of sendIOU
+    }
+
+    suspend fun sendIOU(iou: app.trustipay.offline.domain.OfflineIOU): Result<Unit> {
         return runCatching {
-            val bitmap = generator.generate(envelope)
-            _outgoingBitmaps.value = _outgoingBitmaps.value + bitmap
+            val bitmap = generator.generate(iou)
+            _outgoingBitmaps.value = listOf(bitmap)
         }
     }
 
-    fun feedScannedString(raw: String) {
-        val envelope = generator.decodeEnvelopeFromString(raw) ?: return
+    fun feedScannedString(raw: String): TransportEnvelope? {
+        val iou = generator.decodeIOU(raw)
+        if (iou != null) {
+            _incomingIOUs.tryEmit(iou)
+            return null
+        }
+        val envelope = generator.decodeEnvelopeFromString(raw) ?: return null
         _incomingMessages.tryEmit(envelope)
+        return envelope
     }
+
+    fun incomingIOUs(): Flow<app.trustipay.offline.domain.OfflineIOU> = _incomingIOUs.asSharedFlow()
 
     fun advanceBitmapIndex() {
         val count = _outgoingBitmaps.value.size

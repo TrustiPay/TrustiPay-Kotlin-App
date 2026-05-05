@@ -311,29 +311,4 @@ private data class DemoKeys(
     val receiver: app.trustipay.offline.protocol.GeneratedSigningKey,
 )
 
-data class OfflineUiSnapshot(
-    val balanceMinor: Long,
-    val tokenCount: Int,
-    val pendingSyncCount: Int,
-    val lastMessage: String?,
-    val tokens: List<OfflineTokenUiRow>,
-    val transactions: List<OfflineTransactionUiRow>,
-)
-
-data class OfflineTokenUiRow(
-    val tokenId: String,
-    val amountMinor: Long,
-    val expiresAt: String,
-    val status: String,
-)
-
-data class OfflineTransactionUiRow(
-    val transactionId: String,
-    val counterparty: String,
-    val amountMinor: Long,
-    val currency: String,
-    val state: TransactionState,
-    val direction: TransactionDirection,
-    val transportType: TransportType?,
-    val updatedAt: String,
-)
+// UI State classes moved to OfflineUiState.kt

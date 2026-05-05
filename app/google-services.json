@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "717079689954",
+    "project_id": "trustipay-autosync-e0cc3",
+    "storage_bucket": "trustipay-autosync-e0cc3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:717079689954:android:b3614de9eab40386557cbb",
+        "android_client_info": {
+          "package_name": "app.trustipay"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDYvsgsxXOkaj6WPzItZ8J-RP5j-pYvu-s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

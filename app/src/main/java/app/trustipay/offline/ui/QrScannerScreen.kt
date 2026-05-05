@@ -5,6 +5,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.lifecycle.lifecycleScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
@@ -56,26 +57,18 @@ fun QrScannerScreen(
             AndroidView(
                 factory = { ctx ->
                     PreviewView(ctx).also { previewView ->
-                        // Launched inside AndroidView factory — use LaunchedEffect instead for coroutine scope
+                        scanner.startScanning(previewView)
+                            .onEach { rawValue ->
+                                if (!scanned) {
+                                    scanned = true
+                                    onQrScanned(rawValue)
+                                }
+                            }
+                            .launchIn(lifecycleOwner.lifecycleScope)
                     }
                 },
                 modifier = Modifier.fillMaxSize(),
-            ) { previewView ->
-                // Wire scanner: must be done in a composable scope
-            }
-            // Coroutine scanner collection
-            val previewViewRef = remember { PreviewView(context) }
-            AndroidView(factory = { previewViewRef }, modifier = Modifier.fillMaxSize())
-            LaunchedEffect(Unit) {
-                scanner.startScanning(previewViewRef)
-                    .onEach { rawValue ->
-                        if (!scanned) {
-                            scanned = true
-                            onQrScanned(rawValue)
-                        }
-                    }
-                    .launchIn(this)
-            }
+            )
         } else {
             Box(
                 modifier = Modifier.fillMaxSize(),

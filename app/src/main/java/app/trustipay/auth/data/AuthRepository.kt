@@ -1,14 +1,14 @@
 package app.trustipay.auth.data
 
 import app.trustipay.api.ApiResult
-import app.trustipay.api.TrustiPayApiService
+import app.trustipay.api.AuthApiService
 import app.trustipay.api.safeApiCall
 import app.trustipay.api.dto.LoginRequest
 import app.trustipay.api.dto.RegisterRequest
 import app.trustipay.auth.domain.AuthToken
 
 class AuthRepository(
-    private val apiService: TrustiPayApiService,
+    private val apiService: AuthApiService,
     private val tokenStore: TokenStore,
 ) {
     suspend fun login(email: String, password: String): ApiResult<AuthToken> {

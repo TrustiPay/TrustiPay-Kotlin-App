@@ -1,7 +1,14 @@
 package app.trustipay.offline.ui
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -18,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AssistChip
@@ -26,6 +34,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
@@ -42,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -78,23 +88,111 @@ fun OfflinePaymentsScreen(
         AndroidTransportCapabilityProvider(context, flags).capabilities()
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        OfflineSummary(snapshot = snapshot) { viewModel.syncNow() }
-        PrimaryTabRow(selectedTabIndex = selectedTab) {
-            tabs.forEachIndexed { index, label ->
-                Tab(
-                    selected = selectedTab == index,
-                    onClick = { selectedTab = index },
-                    text = { Text(label) },
-                )
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            OfflineSummary(snapshot = snapshot) { viewModel.syncNow() }
+            PrimaryTabRow(selectedTabIndex = selectedTab) {
+                tabs.forEachIndexed { index, label ->
+                    Tab(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        text = { Text(label) },
+                    )
+                }
+            }
+
+            when (selectedTab) {
+                0 -> PayOfflineTab(snapshot, viewModel, voiceDraft)
+                1 -> ReceiveOfflineTab(snapshot, viewModel)
+                2 -> WalletTab(snapshot)
+                else -> PendingTransactionsTab(snapshot, capabilities.map { it.type.label to it.available })
             }
         }
 
-        when (selectedTab) {
-            0 -> PayOfflineTab(snapshot, viewModel, voiceDraft)
-            1 -> ReceiveOfflineTab(snapshot)
-            2 -> WalletTab(snapshot)
-            else -> PendingTransactionsTab(snapshot, capabilities.map { it.type.label to it.available })
+        when (snapshot.qrFlowMode) {
+            QrFlowMode.DISPLAYING -> {
+                QrDisplayScreen(
+                    transport = viewModel.qrTransport,
+                    amountText = snapshot.qrAmount.orEmpty(),
+                    otpCode = snapshot.otpCode,
+                    showOtpInput = snapshot.showOtpInput,
+                    otpFeedback = snapshot.otpFeedback,
+                    onVerifyOtp = { viewModel.verifySenderOtp(it) },
+                    onClose = { viewModel.cancelQrFlow() }
+                )
+            }
+            QrFlowMode.SCANNING -> {
+                QrScannerScreen(
+                    onQrScanned = { viewModel.onQrScanned(it) },
+                    onClose = { viewModel.cancelQrFlow() }
+                )
+            }
+            QrFlowMode.PROCESSING -> {
+                QrProcessingScreen(message = snapshot.processingMessage ?: "Processing...")
+            }
+            QrFlowMode.IDLE -> {}
+        }
+    }
+}
+
+@Composable
+fun QrProcessingScreen(message: String) {
+    val infiniteTransition = rememberInfiniteTransition(label = "processing")
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.8f,
+        targetValue = 1.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scale"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.8f)
+                .padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(64.dp)
+                        .scale(scale),
+                    tint = TrustiPayPrimary
+                )
+                
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = TrustiPayPrimary,
+                    trackColor = TrustiPayBackground
+                )
+                
+                Text(
+                    text = "This takes a moment to secure your transaction",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
         }
     }
 }
@@ -213,12 +311,12 @@ private fun PayOfflineTab(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
-                    onClick = { viewModel.runQrPayment(amount, receiver, note) },
+                    onClick = { viewModel.startPayFlow(amount, receiver, note) },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Default.QrCodeScanner, contentDescription = null)
                     Spacer(modifier = Modifier.size(8.dp))
-                    Text("Create QR Offer")
+                    Text("Generate IOU to Pay")
                 }
             }
         }
@@ -229,6 +327,7 @@ private fun PayOfflineTab(
 @Composable
 private fun ReceiveOfflineTab(
     snapshot: OfflineUiSnapshot,
+    viewModel: OfflineViewModel,
 ) {
     var amount by rememberSaveable { mutableStateOf("500.00") }
     var note by rememberSaveable { mutableStateOf("Counter payment") }
@@ -259,12 +358,12 @@ private fun ReceiveOfflineTab(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
-                    onClick = { /* TODO: Implement receive logic in ViewModel if needed */ },
+                    onClick = { viewModel.startReceiveFlow() },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Default.QrCodeScanner, contentDescription = null)
                     Spacer(modifier = Modifier.size(8.dp))
-                    Text("Create Request")
+                    Text("Scan IOU QR")
                 }
             }
         }

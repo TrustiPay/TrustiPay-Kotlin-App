@@ -33,8 +33,10 @@ fun PaymentOfferToken.canonicalTokenMap(): Map<String, Any?> = mapOf(
     "amountMinor" to amountMinor,
     "canonicalPayloadBase64Url" to canonicalPayloadBase64Url,
     "currency" to currency,
+    "issuedAtServer" to issuedAtServer,
     "expiresAtServer" to expiresAtServer,
     "issuerKeyId" to issuerKeyId,
+    "nonce" to nonce,
     "serverSignature" to serverSignature,
     "tokenId" to tokenId,
 )
