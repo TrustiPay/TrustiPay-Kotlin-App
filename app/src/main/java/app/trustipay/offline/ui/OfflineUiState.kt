@@ -50,4 +50,8 @@ data class OfflineTransactionUiRow(
     val direction: TransactionDirection,
     val transportType: TransportType?,
     val updatedAt: String,
+    val createdAt: String,
+    val note: String? = null,
+    val senderPreviousHash: String? = null,
+    val receiverPreviousHash: String? = null,
 )

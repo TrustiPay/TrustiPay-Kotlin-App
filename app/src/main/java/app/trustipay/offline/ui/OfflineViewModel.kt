@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.trustipay.AppContainer
 import app.trustipay.BuildConfig
+import app.trustipay.api.ApiResult
 import app.trustipay.offline.OfflineFeatureFlagProvider
 import app.trustipay.offline.data.FirestorePaymentStore
 import app.trustipay.offline.data.OfflinePaymentOpenHelper
@@ -67,6 +68,8 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
     // Demo issuer key — used only when seeding debug data
     private val demoIssuer = if (BuildConfig.DEBUG) app.trustipay.offline.protocol.JavaSigningKeyFactory.generate("issuer-demo-001") else null
 
+    private var syncedBalanceMinor: Long = 0
+
     private val _uiState = MutableStateFlow(OfflineUiSnapshot(0, 0, 0, null, emptyList(), emptyList(), QrFlowMode.IDLE))
     val uiState: StateFlow<OfflineUiSnapshot> = _uiState.asStateFlow()
 
@@ -78,7 +81,22 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             keystoreSigner.ensureKeyPair()
             if (BuildConfig.DEBUG) seedDemoDataIfNeeded()
+            fetchSyncedBalance()
             refreshSnapshot()
+        }
+    }
+
+    private fun fetchSyncedBalance() {
+        viewModelScope.launch(Dispatchers.IO) {
+            when (val result = AppContainer.onlinePaymentRepository.fetchWallet()) {
+                is ApiResult.Success -> {
+                    syncedBalanceMinor = result.data.balanceMinor
+                    refreshSnapshot()
+                }
+                else -> {
+                    // Stay with previous synced balance if offline
+                }
+            }
         }
     }
 
@@ -110,11 +128,18 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
             val now = clock.instant()
             val tokens = store.listTokens()
             val transactions = store.listTransactions()
-            val wallet = OfflineTokenWallet(tokens)
+            
+            // Available Balance = Synced Balance - Pending Offline Sent Amount
+            // We only subtract SENT transactions that are not yet SETTLED on the server.
+            val pendingSentMinor = transactions
+                .filter { it.direction == TransactionDirection.SENT && it.state != TransactionState.SETTLED }
+                .sumOf { it.amountMinor }
+            
+            val availableBalance = syncedBalanceMinor - pendingSentMinor
             val pendingSyncCount = transactions.count { it.state in PendingStates }
 
             _uiState.value = _uiState.value.copy(
-                balanceMinor = wallet.spendableBalance("LKR", now),
+                balanceMinor = availableBalance,
                 tokenCount = tokens.count { it.isSpendableAt(now) },
                 pendingSyncCount = pendingSyncCount,
                 lastMessage = lastMessage,
@@ -126,16 +151,24 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
                         status = it.status.name,
                     )
                 },
-                transactions = transactions.map {
+                transactions = transactions.sortedByDescending { it.createdLocalAt }.map {
                     OfflineTransactionUiRow(
-                        transactionId = it.transactionId.takeLast(8),
+                        transactionId = it.transactionId,
                         counterparty = it.counterpartyAlias.orEmpty(),
                         amountMinor = it.amountMinor,
                         currency = it.currency,
                         state = it.state,
                         direction = it.direction,
                         transportType = it.transportType,
-                        updatedAt = it.updatedLocalAt.toString().take(19),
+                        updatedAt = it.updatedLocalAt.toString().take(19).replace('T', ' '),
+                        createdAt = it.createdLocalAt.toString().take(19).replace('T', ' '),
+                        note = it.offerPayload?.let { p ->
+                            try { 
+                                org.json.JSONObject(String(p)).optString("category")
+                            } catch(e: Exception) { null }
+                        },
+                        senderPreviousHash = it.senderPreviousHash,
+                        receiverPreviousHash = it.receiverPreviousHash
                     )
                 }
             )
@@ -430,6 +463,7 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
 
     fun syncNow() {
         viewModelScope.launch(Dispatchers.IO) {
+            fetchSyncedBalance()
             val summary = syncRepository.processSync()
             refreshSnapshot(summary.message)
         }

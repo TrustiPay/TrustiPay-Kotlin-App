@@ -7,40 +7,56 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Nfc
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Wallet
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Tab
 import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.SheetState
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -69,6 +85,7 @@ import app.trustipay.ui.theme.TrustiPayPrimary
 import app.trustipay.ui.theme.TrustiPaySecondary
 import app.trustipay.ui.theme.TrustiPayTertiary
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OfflinePaymentsScreen(
     modifier: Modifier = Modifier,
@@ -84,29 +101,43 @@ fun OfflinePaymentsScreen(
     val context = LocalContext.current
     val snapshot by viewModel.uiState.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    val tabs = listOf("Payments", "Wallet", "Pending")
-    val capabilities = remember(context, flags) {
-        AndroidTransportCapabilityProvider(context, flags).capabilities()
-    }
+    val tabs = listOf("Payments", "History", "Wallet")
+
+    var selectedTransaction by remember { mutableStateOf<OfflineTransactionUiRow?>(null) }
+    val sheetState = rememberModalBottomSheetState()
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             OfflineSummary(snapshot = snapshot) { viewModel.syncNow() }
             PrimaryTabRow(selectedTabIndex = selectedTab) {
                 tabs.forEachIndexed { index, label ->
+                    val icon = when (index) {
+                        0 -> Icons.Default.Payments
+                        1 -> Icons.Default.History
+                        else -> Icons.Default.Wallet
+                    }
                     Tab(
                         selected = selectedTab == index,
                         onClick = { selectedTab = index },
                         text = { Text(label) },
+                        icon = { Icon(icon, contentDescription = null) }
                     )
                 }
             }
 
             when (selectedTab) {
                 0 -> PaymentsTab(snapshot, viewModel, voiceDraft)
-                1 -> WalletTab(snapshot)
-                else -> PendingTransactionsTab(snapshot, capabilities.map { it.type.label to it.available })
+                1 -> HistoryTab(snapshot) { selectedTransaction = it }
+                else -> WalletTab(snapshot)
             }
+        }
+
+        selectedTransaction?.let { txn ->
+            TransactionDetailSheet(
+                transaction = txn,
+                sheetState = sheetState,
+                onDismiss = { selectedTransaction = null }
+            )
         }
 
         when (snapshot.qrFlowMode) {
@@ -236,7 +267,7 @@ private fun OfflineSummary(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column {
-                    Text("Offline Balance", color = Color.White.copy(alpha = 0.75f))
+                    Text("Available Balance", color = Color.White.copy(alpha = 0.75f))
                     Text(
                         text = "Rs. ${snapshot.balanceMinor.toDisplayAmount()}",
                         style = MaterialTheme.typography.headlineSmall,
@@ -359,6 +390,104 @@ private fun PaymentsTab(
 }
 
 @Composable
+private fun HistoryTab(
+    snapshot: OfflineUiSnapshot,
+    onTransactionClick: (OfflineTransactionUiRow) -> Unit
+) {
+    if (snapshot.transactions.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("No transaction history", color = Color.Gray)
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(snapshot.transactions) { transaction ->
+                TransactionRow(transaction, onClick = { onTransactionClick(transaction) })
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TransactionDetailSheet(
+    transaction: OfflineTransactionUiRow,
+    sheetState: SheetState,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 48.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            IconBadge(transaction.state)
+            
+            Text(
+                text = "Rs. ${transaction.amountMinor.toDisplayAmount()}",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (transaction.direction == TransactionDirection.RECEIVED) TrustiPayTertiary else TrustiPayPrimary
+            )
+            
+            Text(
+                text = transaction.state.label(),
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.Gray
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            DetailRow("Transaction ID", transaction.transactionId.take(16) + "...")
+            DetailRow("Counterparty", transaction.counterparty.ifBlank { "Unknown" })
+            DetailRow("Type", transaction.direction.label())
+            DetailRow("Transport", transaction.transportType?.label ?: "Cloud Sync")
+            DetailRow("Date", transaction.createdAt)
+            transaction.note?.let { DetailRow("Note", it) }
+            
+            if (transaction.senderPreviousHash != null) {
+                DetailRow("Chain Hash", transaction.senderPreviousHash.take(12) + "...")
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Close")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
 private fun WalletTab(snapshot: OfflineUiSnapshot) {
     LazyColumn(
         modifier = Modifier
@@ -415,7 +544,7 @@ private fun PendingTransactionsTab(
             }
         }
         items(snapshot.transactions) { transaction ->
-            TransactionRow(transaction)
+            TransactionRow(transaction, onClick = {})
         }
     }
 }
@@ -443,15 +572,19 @@ private fun OfflineFormCard(
 @Composable
 private fun TransactionPreview(snapshot: OfflineUiSnapshot) {
     snapshot.transactions.firstOrNull()?.let { transaction ->
-        TransactionRow(transaction)
+        TransactionRow(transaction, onClick = {})
     }
 }
 
 @Composable
-private fun TransactionRow(transaction: OfflineTransactionUiRow) {
+private fun TransactionRow(
+    transaction: OfflineTransactionUiRow,
+    onClick: () -> Unit
+) {
     Card(
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
+        modifier = Modifier.clickable { onClick() }
     ) {
         Row(
             modifier = Modifier
@@ -463,19 +596,30 @@ private fun TransactionRow(transaction: OfflineTransactionUiRow) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconBadge(transaction.state)
                 Column {
-                    Text(transaction.counterparty.ifBlank { transaction.transactionId }, fontWeight = FontWeight.Bold)
                     Text(
-                        "${transaction.direction.label()} · ${transaction.transportType?.label ?: "Offline"} · ${transaction.state.label()}",
+                        text = transaction.counterparty.ifBlank { transaction.transactionId.takeLast(8) }, 
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                    Text(
+                        "${transaction.direction.label()} · ${transaction.transportType?.label ?: "Cloud"}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color.Gray,
                     )
                 }
             }
-            Text(
-                "Rs. ${transaction.amountMinor.toDisplayAmount()}",
-                fontWeight = FontWeight.Bold,
-                color = if (transaction.direction == TransactionDirection.RECEIVED) TrustiPayTertiary else TrustiPayPrimary,
-            )
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    "Rs. ${transaction.amountMinor.toDisplayAmount()}",
+                    fontWeight = FontWeight.Bold,
+                    color = if (transaction.direction == TransactionDirection.RECEIVED) TrustiPayTertiary else TrustiPayPrimary,
+                )
+                Text(
+                    transaction.updatedAt.takeLast(8),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
+                )
+            }
         }
     }
 }

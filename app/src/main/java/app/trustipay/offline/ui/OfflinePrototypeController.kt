@@ -66,7 +66,8 @@ class OfflinePrototypeController private constructor(
                     state = it.state,
                     direction = it.direction,
                     transportType = it.transportType,
-                    updatedAt = it.updatedLocalAt.toString().take(19),
+                    updatedAt = it.updatedLocalAt.toString().take(19).replace('T', ' '),
+                    createdAt = it.createdLocalAt.toString().take(19).replace('T', ' '),
                 )
             },
         )
