@@ -39,11 +39,15 @@ class QrPaymentTransport(
         return Result.success(Unit) // Deprecated in favor of sendIOU
     }
 
-    suspend fun sendIOU(iou: app.trustipay.offline.domain.OfflineIOU): Result<Unit> {
-        return runCatching {
+    fun sendIOU(iou: app.trustipay.offline.domain.OfflineIOU): Result<Unit> {
+        val res = runCatching {
             val bitmap = generator.generate(iou)
             _outgoingBitmaps.value = listOf(bitmap)
         }
+        if (res.isFailure) {
+            android.util.Log.e("QrPaymentTransport", "Failed to generate QR bitmap", res.exceptionOrNull())
+        }
+        return res
     }
 
     fun feedScannedString(raw: String): TransportEnvelope? {

@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.AssistChip
@@ -83,7 +84,7 @@ fun OfflinePaymentsScreen(
     val context = LocalContext.current
     val snapshot by viewModel.uiState.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    val tabs = listOf("Pay", "Receive", "Wallet", "Pending")
+    val tabs = listOf("Payments", "Wallet", "Pending")
     val capabilities = remember(context, flags) {
         AndroidTransportCapabilityProvider(context, flags).capabilities()
     }
@@ -102,9 +103,8 @@ fun OfflinePaymentsScreen(
             }
 
             when (selectedTab) {
-                0 -> PayOfflineTab(snapshot, viewModel, voiceDraft)
-                1 -> ReceiveOfflineTab(snapshot, viewModel)
-                2 -> WalletTab(snapshot)
+                0 -> PaymentsTab(snapshot, viewModel, voiceDraft)
+                1 -> WalletTab(snapshot)
                 else -> PendingTransactionsTab(snapshot, capabilities.map { it.type.label to it.available })
             }
         }
@@ -123,7 +123,9 @@ fun OfflinePaymentsScreen(
             }
             QrFlowMode.SCANNING -> {
                 QrScannerScreen(
+                    nfcTransport = viewModel.nfcTransport,
                     onQrScanned = { viewModel.onQrScanned(it) },
+                    onIouReceived = { viewModel.onQrScanned(it.toMinifiedJson()) },
                     onClose = { viewModel.cancelQrFlow() }
                 )
             }
@@ -260,14 +262,14 @@ private fun OfflineSummary(
 }
 
 @Composable
-private fun PayOfflineTab(
+private fun PaymentsTab(
     snapshot: OfflineUiSnapshot,
     viewModel: OfflineViewModel,
     voiceDraft: PaymentDraft? = null,
 ) {
     var amount by rememberSaveable { mutableStateOf("1500.00") }
     var receiver by rememberSaveable { mutableStateOf("Food City") }
-    var note by rememberSaveable { mutableStateOf("Offline purchase") }
+    var note by rememberSaveable { mutableStateOf("Purchase") }
 
     LaunchedEffect(voiceDraft?.eventId) {
         val draft = voiceDraft ?: return@LaunchedEffect
@@ -285,11 +287,11 @@ private fun PayOfflineTab(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            OfflineFormCard(title = "Pay Offline") {
+            OfflineFormCard(title = "Send Payment") {
                 OutlinedTextField(
                     value = receiver,
                     onValueChange = { receiver = it },
-                    label = { Text("Receiver") },
+                    label = { Text("Receiver ID") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -306,8 +308,8 @@ private fun PayOfflineTab(
                     value = note,
                     onValueChange = { note = it },
                     label = { Text("Note") },
-                    minLines = 2,
-                    maxLines = 3,
+                    minLines = 1,
+                    maxLines = 2,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
@@ -316,57 +318,42 @@ private fun PayOfflineTab(
                 ) {
                     Icon(Icons.Default.QrCodeScanner, contentDescription = null)
                     Spacer(modifier = Modifier.size(8.dp))
-                    Text("Generate IOU to Pay")
+                    Text("Pay Now")
                 }
             }
         }
-        item { TransactionPreview(snapshot) }
-    }
-}
-
-@Composable
-private fun ReceiveOfflineTab(
-    snapshot: OfflineUiSnapshot,
-    viewModel: OfflineViewModel,
-) {
-    var amount by rememberSaveable { mutableStateOf("500.00") }
-    var note by rememberSaveable { mutableStateOf("Counter payment") }
-
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+        
         item {
-            OfflineFormCard(title = "Receive Offline") {
-                OutlinedTextField(
-                    value = amount,
-                    onValueChange = { amount = it.filterMoneyInput() },
-                    label = { Text("Amount") },
-                    prefix = { Text("Rs.") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+            OfflineFormCard(title = "Receive Payment") {
+                Text(
+                    "Ask the sender to scan your QR or tap via NFC. No form filling required.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray
                 )
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("Description") },
-                    minLines = 2,
-                    maxLines = 3,
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                )
-                Button(
-                    onClick = { viewModel.startReceiveFlow() },
-                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.QrCodeScanner, contentDescription = null)
-                    Spacer(modifier = Modifier.size(8.dp))
-                    Text("Scan IOU QR")
+                    Button(
+                        onClick = { viewModel.startReceiveFlow() },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = null)
+                        Spacer(modifier = Modifier.size(4.dp))
+                        Text("Scan QR")
+                    }
+                    Button(
+                        onClick = { viewModel.startNfcReceiveFlow() },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Default.Nfc, contentDescription = null)
+                        Spacer(modifier = Modifier.size(4.dp))
+                        Text("NFC Tap")
+                    }
                 }
             }
         }
+
         item { TransactionPreview(snapshot) }
     }
 }
@@ -503,7 +490,7 @@ private fun IconBadge(state: TransactionState) {
         -> TrustiPaySecondary
         else -> MaterialTheme.colorScheme.error
     }
-    androidx.compose.foundation.layout.Box(
+    Box(
         modifier = Modifier
             .size(40.dp)
             .background(TrustiPayBackground, CircleShape),

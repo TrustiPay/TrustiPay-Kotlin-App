@@ -22,11 +22,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -145,6 +147,18 @@ fun QrDisplayScreen(
                         color = Color.Gray,
                     )
                 }
+            }
+
+            Spacer(Modifier.height(24.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .background(Color.LightGray.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                    .padding(8.dp)
+            ) {
+                Icon(Icons.Default.Nfc, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text("OR Tap phone to pay via NFC", style = MaterialTheme.typography.bodyMedium)
             }
 
             otpCode?.let {

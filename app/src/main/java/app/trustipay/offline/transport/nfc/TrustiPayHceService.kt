@@ -13,12 +13,13 @@ class TrustiPayHceService : HostApduService() {
         return try {
             when {
                 isSelectAid(commandApdu) -> {
-                    // Respond with the pending bootstrap payload if available
+                    // Respond with the pending bootstrap payload or IOU if available
                     val bootstrap = pendingBootstrapJson
-                    if (bootstrap != null) {
-                        STATUS_SUCCESS + bootstrap.toByteArray(Charsets.UTF_8)
-                    } else {
-                        STATUS_NO_DATA
+                    val iou = pendingIouJson
+                    when {
+                        bootstrap != null -> STATUS_SUCCESS + bootstrap.toByteArray(Charsets.UTF_8)
+                        iou != null -> STATUS_SUCCESS + iou.toByteArray(Charsets.UTF_8)
+                        else -> STATUS_NO_DATA
                     }
                 }
                 isGetData(commandApdu) -> {
@@ -79,8 +80,10 @@ class TrustiPayHceService : HostApduService() {
     companion object {
         // Shared state between HCE service and NfcPaymentTransport
         val incomingEnvelopes = MutableSharedFlow<TransportEnvelope>(extraBufferCapacity = 64)
+        val incomingIOUs = MutableSharedFlow<app.trustipay.offline.domain.OfflineIOU>(extraBufferCapacity = 64)
         var pendingBootstrapJson: String? = null
         var pendingOutgoingEnvelope: String? = null
+        var pendingIouJson: String? = null
 
         private val STATUS_SUCCESS = byteArrayOf(0x90.toByte(), 0x00.toByte())
         private val STATUS_NO_DATA = byteArrayOf(0x6A.toByte(), 0x82.toByte())

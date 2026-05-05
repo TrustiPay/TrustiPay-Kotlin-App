@@ -31,6 +31,7 @@ data class OfflineUiSnapshot(
     val showOtpInput: Boolean = false,
     val senderOtpCode: String? = null,
     val otpFeedback: OtpFeedback = OtpFeedback.NONE,
+    val nfcMode: Boolean = false,
 )
 
 data class OfflineTokenUiRow(

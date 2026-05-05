@@ -47,6 +47,13 @@ class NfcPaymentTransport(
     override suspend fun close() {
         TrustiPayHceService.pendingOutgoingEnvelope = null
         TrustiPayHceService.pendingBootstrapJson = null
+        TrustiPayHceService.pendingIouJson = null
+    }
+
+    suspend fun sendIOU(iou: app.trustipay.offline.domain.OfflineIOU): Result<Unit> {
+        return runCatching {
+            TrustiPayHceService.pendingIouJson = iou.toMinifiedJson()
+        }
     }
 
     fun setBootstrapPayload(bootstrap: NfcBootstrapPayload) {
@@ -79,6 +86,22 @@ class NfcPaymentTransport(
             if (status[0] != 0x90.toByte() || status[1] != 0x00.toByte()) return null
             val payload = response.dropLast(2).toByteArray()
             parseEnvelope(String(payload, Charsets.UTF_8))
+        }.getOrNull()
+    }
+
+    suspend fun readIOUFromTag(tag: Tag): app.trustipay.offline.domain.OfflineIOU? {
+        return runCatching {
+            val isoDep = IsoDep.get(tag) ?: return null
+            isoDep.connect()
+            val aidApdu = buildSelectAidApdu()
+            val response = isoDep.transceive(aidApdu)
+            isoDep.close()
+            if (response.size < 2) return null
+            val status = response.takeLast(2)
+            if (status[0] != 0x90.toByte() || status[1] != 0x00.toByte()) return null
+            val payload = response.dropLast(2).toByteArray()
+            val raw = String(payload, Charsets.UTF_8)
+            app.trustipay.offline.domain.OfflineIOU.fromJson(raw)
         }.getOrNull()
     }
 

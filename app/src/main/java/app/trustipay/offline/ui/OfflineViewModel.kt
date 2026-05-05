@@ -1,6 +1,7 @@
 package app.trustipay.offline.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.trustipay.AppContainer
@@ -29,12 +30,15 @@ import app.trustipay.offline.security.PublicKeyCache
 import app.trustipay.offline.sync.SyncRepository
 import app.trustipay.offline.transport.qr.QrCodeGenerator
 import app.trustipay.offline.transport.qr.QrPaymentTransport
+import app.trustipay.offline.transport.nfc.NfcPaymentTransport
+import app.trustipay.voice.NetworkUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.time.Clock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 
 class OfflineViewModel(application: Application) : AndroidViewModel(application) {
@@ -67,6 +71,7 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
     val uiState: StateFlow<OfflineUiSnapshot> = _uiState.asStateFlow()
 
     val qrTransport = QrPaymentTransport(QrCodeGenerator())
+    val nfcTransport = NfcPaymentTransport(application)
     private val qrGenerator = QrCodeGenerator()
 
     init {
@@ -141,7 +146,7 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = _uiState.value.copy(
                 qrFlowMode = QrFlowMode.PROCESSING,
-                processingMessage = "Encrypting IOU..."
+                processingMessage = "Preparing secure IOU..."
             )
             
             val money = Money.fromDecimalText(amountText) ?: run {
@@ -151,10 +156,9 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
             }
             
             // Artificial delay for encryption animation
-            kotlinx.coroutines.delay(5000)
+            kotlinx.coroutines.delay(2000)
             
             val senderId = deviceKeyManager.getPublicKeyId()
-            
             val prevHash = firestoreStore.getLastTransactionHash(senderId)
             
             val iou = OfflineIOU(
@@ -171,9 +175,54 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
             )
             
             val signedIou = IOUCryptography.sign(iou)
-            
             val now = clock.instant()
-            // Record in SQLite for UI visibility
+
+            val isOnline = NetworkUtils.isOnline(getApplication())
+            
+            if (isOnline) {
+                _uiState.value = _uiState.value.copy(processingMessage = "Sending via Cloud Queue...")
+                try {
+                    val result = withTimeoutOrNull(5000) {
+                        firestoreStore.saveIOU(signedIou)
+                    }
+                    
+                    if (result != null) {
+                        store.upsertTransaction(
+                            OfflineTransaction(
+                                transactionId = signedIou.tx_id,
+                                requestId = null,
+                                direction = TransactionDirection.SENT,
+                                counterpartyAlias = receiverId,
+                                amountMinor = money.amountMinor,
+                                currency = "LKR",
+                                state = TransactionState.SETTLED,
+                                transportType = null, // Cloud
+                                requestPayload = null,
+                                offerPayload = signedIou.toJson().toByteArray(),
+                                receiptPayload = null,
+                                requestHash = null,
+                                offerHash = IOUCryptography.hash(signedIou.toJson()),
+                                receiptHash = null,
+                                senderPreviousHash = signedIou.prev_hash,
+                                createdLocalAt = now,
+                                updatedLocalAt = now
+                            )
+                        )
+                        
+                        refreshSnapshot("Online Payment Sent!")
+                        _uiState.value = _uiState.value.copy(qrFlowMode = QrFlowMode.IDLE)
+                        return@launch
+                    } else {
+                        Log.w("OfflineViewModel", "Online payment timed out, falling back to offline")
+                    }
+                } catch (e: Exception) {
+                    Log.e("OfflineViewModel", "Online payment failed, falling back to offline", e)
+                }
+            }
+
+            // Fallback or explicit offline flow
+            _uiState.value = _uiState.value.copy(processingMessage = "Network unavailable. Generating QR/NFC...")
+            
             store.upsertTransaction(
                 OfflineTransaction(
                     transactionId = signedIou.tx_id,
@@ -206,8 +255,13 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
                     expiresAtDevice = now.plusSeconds(300)
                 )
             )
-            qrTransport.sendIOU(signedIou)
+            val qrResult = qrTransport.sendIOU(signedIou)
+            nfcTransport.sendIOU(signedIou)
             
+            if (qrResult.isFailure) {
+                Log.e("OfflineViewModel", "QR Generation Failed", qrResult.exceptionOrNull())
+            }
+
             val otpForSender = IOUCryptography.generateOTP(signedIou.signature)
 
             _uiState.value = _uiState.value.copy(
@@ -245,7 +299,11 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun startReceiveFlow() {
-        _uiState.value = _uiState.value.copy(qrFlowMode = QrFlowMode.SCANNING)
+        _uiState.value = _uiState.value.copy(qrFlowMode = QrFlowMode.SCANNING, nfcMode = false)
+    }
+
+    fun startNfcReceiveFlow() {
+        _uiState.value = _uiState.value.copy(qrFlowMode = QrFlowMode.SCANNING, nfcMode = true)
     }
 
     fun onQrScanned(raw: String) {
@@ -263,11 +321,11 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
         try {
             _uiState.value = _uiState.value.copy(
                 qrFlowMode = QrFlowMode.PROCESSING,
-                processingMessage = "Decrypting & Verifying IOU..."
+                processingMessage = "Verifying IOU..."
             )
             
             // Artificial delay for decryption animation
-            kotlinx.coroutines.delay(5000)
+            kotlinx.coroutines.delay(2000)
             
             if (!IOUCryptography.verify(iou)) {
                 refreshSnapshot("IOU Signature Verification Failed!")
@@ -279,33 +337,66 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
                 refreshSnapshot("IOU Hash Chain Broken!")
                 return
             }
+
+            val isOnline = NetworkUtils.isOnline(getApplication())
+            var settledOnline = false
             
-            firestoreStore.saveIOU(iou)
+            if (isOnline) {
+                _uiState.value = _uiState.value.copy(processingMessage = "Settling online...")
+                try {
+                    // Try to save to Firestore (acting as a cloud queue)
+                    // If this fails or times out, we mark it as locally accepted
+                    val syncResult = withTimeoutOrNull(3000) {
+                        firestoreStore.saveIOU(iou)
+                    }
+                    if (syncResult != null) {
+                        settledOnline = true
+                    } else {
+                        Log.w("OfflineViewModel", "Receiver sync timed out, queuing locally")
+                    }
+                } catch (e: Exception) {
+                    Log.e("OfflineViewModel", "Receiver sync failed, queuing locally", e)
+                }
+            }
+
+            val state = if (settledOnline) TransactionState.SETTLED else TransactionState.LOCAL_ACCEPTED_PENDING_SYNC
+            
+            // If we are offline or sync timed out, fire-and-forget the Firestore save.
+            // Firestore's local persistence will handle the upload once back online.
+            if (!settledOnline) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    firestoreStore.saveIOU(iou)
+                }
+            }
             
             // Record in SQLite for UI visibility
             val now = clock.instant()
-            store.upsertTransaction(
-                OfflineTransaction(
-                    transactionId = iou.tx_id,
-                    requestId = null,
-                    direction = TransactionDirection.RECEIVED,
-                    counterpartyAlias = iou.sender_id,
-                    amountMinor = (iou.amount * 100).toLong(),
-                    currency = "LKR",
-                    state = TransactionState.LOCAL_ACCEPTED_PENDING_SYNC,
-                    transportType = TransportType.QR,
-                    requestPayload = null,
-                    offerPayload = iou.toJson().toByteArray(),
-                    receiptPayload = null,
-                    requestHash = null,
-                    offerHash = IOUCryptography.hash(iou.toJson()),
-                    receiptHash = null,
-                    senderPreviousHash = iou.prev_hash,
-                    receiverPreviousHash = store.latestLocalChainHash(deviceKeyManager.getPublicKeyId()),
-                    createdLocalAt = now,
-                    updatedLocalAt = now
-                )
+            val transaction = OfflineTransaction(
+                transactionId = iou.tx_id,
+                requestId = null,
+                direction = TransactionDirection.RECEIVED,
+                counterpartyAlias = iou.sender_id,
+                amountMinor = (iou.amount * 100).toLong(),
+                currency = "LKR",
+                state = state,
+                transportType = TransportType.QR,
+                requestPayload = null,
+                offerPayload = iou.toJson().toByteArray(),
+                receiptPayload = null,
+                requestHash = null,
+                offerHash = IOUCryptography.hash(iou.toJson()),
+                receiptHash = null,
+                senderPreviousHash = iou.prev_hash,
+                receiverPreviousHash = store.latestLocalChainHash(deviceKeyManager.getPublicKeyId()),
+                createdLocalAt = now,
+                updatedLocalAt = now
             )
+            store.upsertTransaction(transaction)
+
+            // If not settled, queue for background sync
+            if (!settledOnline) {
+                syncRepository.queueAcceptedTransaction(transaction)
+            }
             
             val otp = IOUCryptography.generateOTP(iou.signature)
             
@@ -315,7 +406,8 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
                 otpCode = otp
             )
             
-            refreshSnapshot("Payment received locally! Syncing...")
+            val msg = if (isOnline) "Payment received & settled!" else "Payment received locally! Syncing..."
+            refreshSnapshot(msg)
             
         } catch (e: Exception) {
             refreshSnapshot("Error processing IOU: ${e.message}")
@@ -325,6 +417,7 @@ class OfflineViewModel(application: Application) : AndroidViewModel(application)
     fun cancelQrFlow() {
         viewModelScope.launch {
             qrTransport.close()
+            nfcTransport.close()
             _uiState.value = _uiState.value.copy(
                 qrFlowMode = QrFlowMode.IDLE, 
                 qrAmount = null, 
