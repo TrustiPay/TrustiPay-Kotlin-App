@@ -1,26 +1,33 @@
 package app.trustipay.auth.data
 
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.auth.FirebaseAuthWeakPasswordException
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.userProfileChangeRequest
 import app.trustipay.api.ApiResult
-import app.trustipay.api.AuthApiService
-import app.trustipay.api.safeApiCall
-import app.trustipay.api.dto.LoginRequest
-import app.trustipay.api.dto.RegisterRequest
 import app.trustipay.auth.domain.AuthToken
+import kotlinx.coroutines.tasks.await
 
-class AuthRepository(
-    private val apiService: AuthApiService,
-    private val tokenStore: TokenStore,
-) {
+class AuthRepository(private val tokenStore: TokenStore) {
+
+    private val auth = FirebaseAuth.getInstance()
+
     suspend fun login(email: String, password: String): ApiResult<AuthToken> {
-        val result = safeApiCall { apiService.loginUser(LoginRequest(email, password)) }
-        if (result is ApiResult.Success) {
-            val r = result.data
-            val token = AuthToken.fromLoginResponse(r.accessToken, r.refreshToken, r.expiresIn, r.userId, r.displayName)
+        return try {
+            val result = auth.signInWithEmailAndPassword(email, password).await()
+            val user = result.user ?: return ApiResult.AuthError
+            val token = buildToken(user)
             tokenStore.save(token)
-        }
-        return when (result) {
-            is ApiResult.Success -> ApiResult.Success(tokenStore.load()!!)
-            else -> @Suppress("UNCHECKED_CAST") (result as ApiResult<AuthToken>)
+            ApiResult.Success(token)
+        } catch (e: FirebaseAuthInvalidCredentialsException) {
+            ApiResult.AuthError
+        } catch (e: FirebaseAuthInvalidUserException) {
+            ApiResult.AuthError
+        } catch (e: Exception) {
+            ApiResult.NetworkError(e)
         }
     }
 
@@ -30,32 +37,47 @@ class AuthRepository(
         phoneNumber: String,
         password: String,
     ): ApiResult<AuthToken> {
-        val normalized = normalizePhone(phoneNumber)
-        val result = safeApiCall {
-            apiService.registerUser(RegisterRequest(fullName, email, normalized, password))
-        }
-        if (result is ApiResult.Success) {
-            val r = result.data
-            val token = AuthToken.fromLoginResponse(r.accessToken, r.refreshToken, r.expiresIn, r.userId, r.displayName)
+        return try {
+            val result = auth.createUserWithEmailAndPassword(email, password).await()
+            val user = result.user ?: return ApiResult.AuthError
+            user.updateProfile(userProfileChangeRequest { displayName = fullName }).await()
+            val token = buildToken(user, overrideName = fullName)
             tokenStore.save(token)
-        }
-        return when (result) {
-            is ApiResult.Success -> ApiResult.Success(tokenStore.load()!!)
-            else -> @Suppress("UNCHECKED_CAST") (result as ApiResult<AuthToken>)
+            ApiResult.Success(token)
+        } catch (e: FirebaseAuthUserCollisionException) {
+            ApiResult.HttpError(409, "Email already registered")
+        } catch (e: FirebaseAuthWeakPasswordException) {
+            ApiResult.HttpError(400, "Password must be at least 6 characters")
+        } catch (e: Exception) {
+            ApiResult.NetworkError(e)
         }
     }
 
-    fun isLoggedIn(): Boolean = tokenStore.load()?.isExpired() == false
-
-    fun logout() = tokenStore.clear()
-
-    private fun normalizePhone(raw: String): String {
-        val digits = raw.filter { it.isDigit() }
-        return when {
-            digits.startsWith("94") && digits.length == 11 -> digits
-            digits.startsWith("0") && digits.length == 10 -> "94${digits.drop(1)}"
-            digits.length == 9 -> "94$digits"
-            else -> digits
+    fun isLoggedIn(): Boolean {
+        val fbUser = auth.currentUser ?: return false
+        val stored = tokenStore.load()
+        if (stored == null || stored.isExpired()) {
+            tokenStore.save(buildToken(fbUser))
         }
+        return true
+    }
+
+    fun logout() {
+        auth.signOut()
+        tokenStore.clear()
+    }
+
+    private fun buildToken(user: FirebaseUser, overrideName: String? = null): AuthToken {
+        val name = overrideName
+            ?: user.displayName?.takeIf { it.isNotBlank() }
+            ?: user.email?.substringBefore("@")
+            ?: "User"
+        return AuthToken(
+            accessToken = user.uid,
+            refreshToken = null,
+            expiresAt = System.currentTimeMillis() / 1000 + 3600,
+            userId = user.uid,
+            displayName = name,
+        )
     }
 }

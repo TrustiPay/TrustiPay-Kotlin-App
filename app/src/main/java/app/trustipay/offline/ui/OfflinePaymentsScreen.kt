@@ -246,7 +246,7 @@ private fun DisabledOfflineScreen(modifier: Modifier) {
 }
 
 @Composable
-private fun OfflineSummary(
+internal fun OfflineSummary(
     snapshot: OfflineUiSnapshot,
     onSyncClick: () -> Unit,
 ) {
@@ -390,7 +390,7 @@ private fun PaymentsTab(
 }
 
 @Composable
-private fun HistoryTab(
+internal fun HistoryTab(
     snapshot: OfflineUiSnapshot,
     onTransactionClick: (OfflineTransactionUiRow) -> Unit
 ) {
@@ -418,7 +418,7 @@ private fun HistoryTab(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TransactionDetailSheet(
+internal fun TransactionDetailSheet(
     transaction: OfflineTransactionUiRow,
     sheetState: SheetState,
     onDismiss: () -> Unit
@@ -477,7 +477,7 @@ private fun TransactionDetailSheet(
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
+internal fun DetailRow(label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween
@@ -577,7 +577,7 @@ private fun TransactionPreview(snapshot: OfflineUiSnapshot) {
 }
 
 @Composable
-private fun TransactionRow(
+internal fun TransactionRow(
     transaction: OfflineTransactionUiRow,
     onClick: () -> Unit
 ) {
@@ -625,7 +625,7 @@ private fun TransactionRow(
 }
 
 @Composable
-private fun IconBadge(state: TransactionState) {
+internal fun IconBadge(state: TransactionState) {
     val tint = when (state) {
         TransactionState.SETTLED -> TrustiPayTertiary
         TransactionState.SERVER_VALIDATING,
@@ -647,7 +647,7 @@ private fun IconBadge(state: TransactionState) {
 private fun String.filterMoneyInput(): String =
     filter { (it.isDigit() || it == '.' || it == ',') }.take(18)
 
-private fun Long.toDisplayAmount(): String {
+internal fun Long.toDisplayAmount(): String {
     val major = this / 100
     val minor = kotlin.math.abs(this % 100)
     return "%,d.%02d".format(major, minor)
@@ -659,7 +659,7 @@ private fun String.statusColor(): Color = when (this) {
     else -> Color.Gray
 }
 
-private fun TransactionState.label(): String = when (this) {
+internal fun TransactionState.label(): String = when (this) {
     TransactionState.LOCAL_ACCEPTED_PENDING_SYNC,
     TransactionState.SYNC_QUEUED,
     -> "Accepted offline"
@@ -671,7 +671,7 @@ private fun TransactionState.label(): String = when (this) {
     else -> if (name.startsWith("REJECTED")) "Rejected" else name.replace('_', ' ')
 }
 
-private fun TransactionDirection.label(): String = when (this) {
+internal fun TransactionDirection.label(): String = when (this) {
     TransactionDirection.SENT -> "Sent"
     TransactionDirection.RECEIVED -> "Received"
 }

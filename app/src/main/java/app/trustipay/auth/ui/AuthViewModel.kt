@@ -43,7 +43,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 is ApiResult.HttpError -> _uiState.value = AuthUiState.Error(
                     if (result.code == 401) "Invalid email or password" else result.message
                 )
-                is ApiResult.NetworkError -> _uiState.value = AuthUiState.Error("Network error — check your connection")
+                is ApiResult.NetworkError -> _uiState.value = AuthUiState.Error(result.cause.message ?: "Network error — check your connection")
                 ApiResult.AuthError -> _uiState.value = AuthUiState.Error("Invalid email or password")
             }
         }
@@ -57,10 +57,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.value = AuthUiState.Idle
                     _navEvents.send(AuthNavEvent.NavigateToHome)
                 }
-                is ApiResult.HttpError -> _uiState.value = AuthUiState.Error(
-                    if (result.code == 409) "Email already registered" else result.message
-                )
-                is ApiResult.NetworkError -> _uiState.value = AuthUiState.Error("Network error — check your connection")
+                is ApiResult.HttpError -> _uiState.value = AuthUiState.Error(result.message)
+                is ApiResult.NetworkError -> _uiState.value = AuthUiState.Error(result.cause.message ?: "Network error — check your connection")
                 ApiResult.AuthError -> _uiState.value = AuthUiState.Error("Authentication error")
             }
         }

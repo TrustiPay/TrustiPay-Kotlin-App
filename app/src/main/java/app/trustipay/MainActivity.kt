@@ -11,7 +11,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
@@ -19,11 +18,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -46,9 +44,9 @@ import app.trustipay.auth.ui.AuthNavEvent
 import app.trustipay.auth.ui.AuthViewModel
 import app.trustipay.auth.ui.LoginScreen
 import app.trustipay.auth.ui.RegisterScreen
-import app.trustipay.offline.OfflineFeatureFlagProvider
 import app.trustipay.offline.sync.OfflineSyncWorker
-import app.trustipay.offline.ui.OfflinePaymentsScreen
+import app.trustipay.offline.ui.OfflineHistoryScreen
+import app.trustipay.offline.ui.OfflineViewModel
 import app.trustipay.online.ui.HomeViewModel
 import app.trustipay.analytics.ui.AnalyticsScreen
 import app.trustipay.ui.screens.HomeScreen
@@ -78,11 +76,11 @@ class MainActivity : ComponentActivity() {
 
     private fun scheduleWorkers() {
         val workManager = WorkManager.getInstance(this)
-        
+
         val syncConstraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
-            
+
         workManager.enqueueUniquePeriodicWork(
             "offline_sync",
             ExistingPeriodicWorkPolicy.KEEP,
@@ -90,7 +88,7 @@ class MainActivity : ComponentActivity() {
                 .setConstraints(syncConstraints)
                 .build(),
         )
-        
+
         workManager.enqueueUniquePeriodicWork(
             "token_refresh",
             ExistingPeriodicWorkPolicy.KEEP,
@@ -111,7 +109,7 @@ class MainActivity : ComponentActivity() {
 fun TrustiPayApp(onAuthGateChanged: (Boolean) -> Unit = {}) {
     val authViewModel: AuthViewModel = viewModel()
     val isLoggedIn = remember {
-        mutableStateOf(AppContainer.tokenStore.load()?.isExpired() == false)
+        mutableStateOf(AppContainer.authRepository.isLoggedIn())
     }
 
     LaunchedEffect(isLoggedIn.value) {
@@ -169,17 +167,12 @@ private fun MainApp(
     var voiceDraftEventId by rememberSaveable { mutableStateOf(0) }
     var latestVoiceDraft by remember { mutableStateOf<PaymentDraft?>(null) }
     val homeViewModel: HomeViewModel = viewModel()
-
-    val visibleDestinations = remember {
-        AppDestinations.entries.filter { destination ->
-            !destination.requiresOfflineFlag || OfflineFeatureFlagProvider.current.offlinePaymentsEnabled
-        }
-    }
+    val offlineViewModel: OfflineViewModel = viewModel()
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavigationSuiteScaffold(
             navigationSuiteItems = {
-                visibleDestinations.forEach {
+                AppDestinations.entries.forEach {
                     item(
                         icon = { Icon(imageVector = it.icon, contentDescription = it.label) },
                         label = { Text(it.label) },
@@ -196,15 +189,15 @@ private fun MainApp(
                         voiceDraft = latestVoiceDraft,
                         onVoiceClick = { showVoiceAssistant = true },
                         homeViewModel = homeViewModel,
+                        offlineViewModel = offlineViewModel,
                     )
                     AppDestinations.ANALYTICS -> AnalyticsScreen(
                         modifier = Modifier.padding(innerPadding)
                     )
-                    AppDestinations.OFFLINE -> OfflinePaymentsScreen(
+                    AppDestinations.HISTORY -> OfflineHistoryScreen(
                         modifier = Modifier.padding(innerPadding),
-                        voiceDraft = latestVoiceDraft
+                        viewModel = offlineViewModel,
                     )
-                    AppDestinations.HISTORY -> PlaceholderScreen("Transaction History", Modifier.padding(innerPadding))
                     AppDestinations.PROFILE -> ProfileScreen(
                         modifier = Modifier.padding(innerPadding),
                         onLogout = {
@@ -222,7 +215,7 @@ private fun MainApp(
                 onPaymentDraft = { draft ->
                     voiceDraftEventId += 1
                     latestVoiceDraft = draft.copy(eventId = voiceDraftEventId)
-                    currentDestination = if (draft.isOffline) AppDestinations.OFFLINE else AppDestinations.HOME
+                    currentDestination = AppDestinations.HOME
                     showVoiceAssistant = false
                 }
             )
@@ -263,11 +256,9 @@ fun ProfileScreen(modifier: Modifier = Modifier, onLogout: () -> Unit) {
 enum class AppDestinations(
     val label: String,
     val icon: ImageVector,
-    val requiresOfflineFlag: Boolean = false,
 ) {
     HOME("Home", Icons.Default.Home),
     ANALYTICS("Analytics", Icons.Default.BarChart),
-    OFFLINE("Offline", Icons.Default.QrCodeScanner, requiresOfflineFlag = true),
     HISTORY("History", Icons.Default.History),
     PROFILE("Profile", Icons.Default.Person),
 }

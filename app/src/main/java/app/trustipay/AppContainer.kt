@@ -33,7 +33,7 @@ object AppContainer {
         tokenStore = TokenStore(application)
         authApiService = ApiClientFactory.createAuthService()
         apiService = ApiClientFactory.create(tokenStore)
-        authRepository = AuthRepository(authApiService, tokenStore)
+        authRepository = AuthRepository(tokenStore)
         onlinePaymentRepository = OnlinePaymentRepository(apiService)
         tokenIssuanceRepository = TokenIssuanceRepository(application, apiService)
         keyRegistrationRepository = KeyRegistrationRepository(application, apiService)
